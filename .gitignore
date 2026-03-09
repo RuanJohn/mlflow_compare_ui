@@ -1,0 +1,75 @@
+.idea
+*.iml
+.DS_Store
+__pycache__
+
+logs
+*.log
+out_files
+backup
+DEFAULT-ID
+
+__pycache__
+output
+
+*.pb.go
+*pb2.py
+
+.vscode/
+.cursor/
+
+pcb-kicad-parser/.antlr/
+.neptune/
+.ipynb_checkpoints/
+*.ipynb
+checkpoints/
+ckpts/
+go_explore_boards/
+extras/
+xai_plots/
+evaluation_reports/
+*.egg-info
+
+conan.lock
+conanbuildinfo.cmake
+conanbuildinfo.txt
+conaninfo.txt
+graph_info.json
+
+dotnet-install.sh
+llvm.sh
+llvm.sh.1
+pcb-engine/dotnet-install.sh
+pcb-engine/editor.json
+pcb-engine/imgui.ini
+
+playground.py
+pyrightconfig.json
+
+# vim swap files
+*.sw?
+
+# Redis configuration files
+redis_config/
+redis_config/*.conf
+pcb-api-job-state-store/
+pcb-api/pcb_api/evaluation/report/
+
+.temp_files/
+
+# Grafana data
+data/
+local/
+
+# Secrets
+.env
+
+# Hydra output files
+outputs/
+
+# Render output
+*.mp4
+*.png
+
+.venv/
+*.db
