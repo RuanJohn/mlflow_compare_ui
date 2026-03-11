@@ -34,6 +34,7 @@ a{color:var(--accent2)}
 .sb-section input[type=text]:focus{outline:none;border-color:var(--accent)}
 .sb-section label{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--fg2);cursor:pointer}
 .sb-section input[type=range]{width:100%;accent-color:var(--accent)}
+.sb-section select{width:100%;padding:4px 6px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg);color:var(--fg);font-size:12px}
 
 /* Buttons */
 .btn{display:inline-flex;align-items:center;gap:4px;padding:5px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg3);color:var(--fg);font-size:12px;cursor:pointer;white-space:nowrap;transition:background .1s}
@@ -69,11 +70,33 @@ td.mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:11px;color:var(
 .ms-pill:hover{background:var(--red)}
 .ms-pill::after{content:"×";font-weight:bold}
 
+/* Selected runs panel */
+.selected-runs{margin-bottom:16px}
+.sr-card{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:6px}
+.sr-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.sr-info{flex:1;min-width:0}
+.sr-legend-input{width:100%;padding:3px 6px;border:1px solid transparent;border-radius:3px;background:transparent;color:var(--fg);font-size:12px;font-weight:600;transition:border-color .15s}
+.sr-legend-input:hover{border-color:var(--border)}
+.sr-legend-input:focus{outline:none;border-color:var(--accent);background:var(--bg)}
+.sr-exp{font-size:10px;color:var(--fg2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-left:7px}
+.sr-remove{background:none;border:none;color:var(--fg2);font-size:16px;cursor:pointer;padding:0 4px;line-height:1;flex-shrink:0}
+.sr-remove:hover{color:var(--red)}
+
 /* Chart grid */
 .chart-grid{display:grid;gap:14px;margin-top:14px}
-.chart-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:10px}
-.chart-title{font-size:12px;font-weight:600;margin-bottom:6px;color:var(--fg2)}
+.chart-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:10px;position:relative}
+.chart-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.chart-title{font-size:12px;font-weight:600;color:var(--fg2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.chart-toolbar{display:flex;gap:4px;flex-shrink:0}
+.chart-toolbar button{background:none;border:1px solid var(--border);border-radius:3px;color:var(--fg2);font-size:10px;padding:2px 6px;cursor:pointer;transition:background .1s}
+.chart-toolbar button:hover{background:var(--bg3);color:var(--fg)}
 .chart-empty{padding:30px;text-align:center;color:var(--fg2);font-size:12px}
+
+/* Override uPlot legend for dark theme */
+.u-legend{font-size:11px !important;padding:4px 0 0 !important}
+.u-legend th{font-weight:600;color:var(--fg2)}
+.u-legend td{color:var(--fg)}
+.u-series>*{padding:2px 4px !important}
 
 /* Toast / info bar */
 .info-bar{padding:8px 14px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);color:var(--fg2);font-size:12px;margin-bottom:12px}
@@ -110,6 +133,11 @@ td.mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:11px;color:var(
 <div class="main">
   <div class="sidebar">
     <div class="sb-section">
+      <h3>Run Type</h3>
+      <label><input type="radio" name="runtype" value="training" checked> Training</label>
+      <label style="margin-top:4px"><input type="radio" name="runtype" value="evaluation"> Evaluation</label>
+    </div>
+    <div class="sb-section">
       <h3>Filters</h3>
       <input type="text" id="nameFilter" placeholder="Filter by run name…">
       <input type="text" id="tagFilter" placeholder="Filter by tags…">
@@ -123,6 +151,24 @@ td.mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:11px;color:var(
       <h3>X-Axis</h3>
       <label><input type="radio" name="xaxis" value="step" checked> Step</label>
       <label style="margin-top:4px"><input type="radio" name="xaxis" value="wall"> Relative Wall Time</label>
+    </div>
+    <div class="sb-section">
+      <h3>Y-Axis Scale</h3>
+      <label><input type="radio" name="yscale" value="linear" checked> Linear</label>
+      <label style="margin-top:4px"><input type="radio" name="yscale" value="log"> Log</label>
+    </div>
+    <div class="sb-section">
+      <h3>Smoothing</h3>
+      <input type="range" id="smoothSlider" min="0" max="0.99" step="0.01" value="0">
+      <div style="text-align:center;color:var(--fg2);font-size:11px"><span id="smoothVal">0</span></div>
+    </div>
+    <div class="sb-section">
+      <h3>Chart Grouping</h3>
+      <select id="groupMode">
+        <option value="separate">One chart per metric</option>
+        <option value="prefix">Auto-group by prefix</option>
+        <option value="overlay">All metrics on one chart</option>
+      </select>
     </div>
     <div class="sb-section">
       <h3>Actions</h3>
@@ -161,6 +207,12 @@ td.mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:11px;color:var(
       </div>
     </div>
 
+    <!-- Selected runs legend panel -->
+    <div id="selectedRunsSection" style="display:none">
+      <h2 style="font-size:14px;font-weight:600;margin-bottom:8px">Selected Runs</h2>
+      <div id="selectedRunsList" class="selected-runs"></div>
+    </div>
+
     <!-- Metric selector -->
     <div id="metricSection" style="display:none">
       <h2 style="font-size:14px;font-weight:600;margin-bottom:8px">Metric Comparison</h2>
@@ -184,7 +236,7 @@ td.mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:11px;color:var(
 (function(){
 "use strict";
 
-const DEFAULT_METRICS = [
+const DEFAULT_METRICS_TRAINING = [
   "actor/episode_return_mean",
   "actor/connected_ratio_mean",
   "actor/is_fully_connected_mean",
@@ -193,6 +245,22 @@ const DEFAULT_METRICS = [
   "trainer/critic_stats/vf_loss_mean",
   "trainer/entropy_stats/policy_mean",
 ];
+
+const DEFAULT_METRICS_EVALUATION = [
+  "logs/blood_pressure/run_1/postprocessing_num_connections_missing",
+  "logs/colororgan/run_1/postprocessing_num_connections_missing",
+  "logs/lfo4/run_1/postprocessing_num_connections_missing",
+  "logs/mainboard/run_1/postprocessing_num_connections_missing",
+  "logs/onebond/run_1/postprocessing_num_connections_missing",
+  "logs/opreR3/run_1/postprocessing_num_connections_missing",
+  "logs/pob96/run_1/postprocessing_num_connections_missing",
+  "logs/strf/run_1/postprocessing_num_connections_missing",
+];
+
+function getDefaultMetrics() {
+  const radio = document.querySelector('input[name="runtype"]:checked');
+  return (radio && radio.value === "evaluation") ? DEFAULT_METRICS_EVALUATION : DEFAULT_METRICS_TRAINING;
+}
 
 const COLORS = [
   "#6366f1","#22c55e","#f59e0b","#ef4444","#06b6d4","#ec4899",
@@ -208,6 +276,7 @@ let selectedRunIds = new Set();
 let selectedMetrics = new Set();
 let experimentId = null;
 let uplotInstances = [];
+const customLegends = new Map();
 
 // DOM refs
 const $exp = document.getElementById("expInput");
@@ -233,6 +302,11 @@ const $metricBox = document.getElementById("metricBox");
 const $metricPills = document.getElementById("metricPills");
 const $compareBtn = document.getElementById("compareBtn");
 const $chartGrid = document.getElementById("chartGrid");
+const $smoothSlider = document.getElementById("smoothSlider");
+const $smoothVal = document.getElementById("smoothVal");
+const $groupMode = document.getElementById("groupMode");
+const $selectedRunsSection = document.getElementById("selectedRunsSection");
+const $selectedRunsList = document.getElementById("selectedRunsList");
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -269,6 +343,29 @@ function getXAxisMode() {
   return radio ? radio.value : "step";
 }
 
+function getYScale() {
+  const radio = document.querySelector('input[name="yscale"]:checked');
+  return radio ? radio.value : "linear";
+}
+
+function getSmoothingFactor() {
+  return parseFloat($smoothSlider.value) || 0;
+}
+
+function emaSmooth(values, alpha) {
+  if (alpha <= 0) return values;
+  const out = new Float64Array(values.length);
+  let ema = NaN;
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i];
+    if (isNaN(v)) { out[i] = NaN; continue; }
+    if (isNaN(ema)) { ema = v; }
+    else { ema = alpha * ema + (1 - alpha) * v; }
+    out[i] = ema;
+  }
+  return out;
+}
+
 function getFilteredRuns() {
   const nf = $nameFilter.value.toLowerCase();
   const tf = $tagFilter.value.toLowerCase();
@@ -277,6 +374,28 @@ function getFilteredRuns() {
     if (tf && !r.tags_list.some(t => t.toLowerCase().includes(tf))) return false;
     return true;
   });
+}
+
+function getMetricPrefix(m) {
+  const idx = m.indexOf("/");
+  return idx > 0 ? m.substring(0, idx) : m;
+}
+
+function groupMetrics(metrics) {
+  const mode = $groupMode.value;
+  if (mode === "overlay") {
+    return [{ name: "All Metrics", metrics: [...metrics] }];
+  }
+  if (mode === "prefix") {
+    const groups = {};
+    metrics.forEach(m => {
+      const prefix = getMetricPrefix(m);
+      if (!groups[prefix]) groups[prefix] = [];
+      groups[prefix].push(m);
+    });
+    return Object.entries(groups).map(([name, ms]) => ({ name, metrics: ms }));
+  }
+  return metrics.map(m => ({ name: m, metrics: [m] }));
 }
 
 // ── Load experiment & runs ───────────────────────────────────────────────
@@ -304,15 +423,14 @@ async function loadExperiment() {
       return showInfo("No runs found for this experiment.", "");
     }
 
-    // Collect metric names from runs
     const metricSet = new Set();
     allRuns.forEach(r => (r.metric_keys||[]).forEach(k => metricSet.add(k)));
     allMetricNames = [...metricSet].sort();
 
-    // Keep only selections that still exist
     selectedRunIds = new Set([...selectedRunIds].filter(id => allRuns.some(r => r.run_id === id)));
 
     renderTable();
+    renderSelectedRuns();
     renderMetricSelector();
     $tableSection.style.display = "";
     $metricSection.style.display = "";
@@ -343,7 +461,6 @@ function renderTable() {
   }).join("");
   $tbody.innerHTML = html;
 
-  // Update header checkbox
   const allChecked = filtered.length > 0 && filtered.every(r => selectedRunIds.has(r.run_id));
   $thCheckAll.checked = allChecked;
   $thCheckAll.indeterminate = !allChecked && filtered.some(r => selectedRunIds.has(r.run_id));
@@ -355,16 +472,15 @@ function esc(s) {
   return d.innerHTML;
 }
 
-// Checkbox events (event delegation)
 $tbody.addEventListener("change", e => {
   if (!e.target.classList.contains("run-cb")) return;
   const id = e.target.dataset.id;
   if (e.target.checked) selectedRunIds.add(id); else selectedRunIds.delete(id);
-  // Update header checkbox state without full re-render
   const filtered = getFilteredRuns();
   const allChecked = filtered.length > 0 && filtered.every(r => selectedRunIds.has(r.run_id));
   $thCheckAll.checked = allChecked;
   $thCheckAll.indeterminate = !allChecked && filtered.some(r => selectedRunIds.has(r.run_id));
+  renderSelectedRuns();
 });
 
 $thCheckAll.addEventListener("change", () => {
@@ -375,14 +491,15 @@ $thCheckAll.addEventListener("change", () => {
     filtered.forEach(r => selectedRunIds.delete(r.run_id));
   }
   renderTable();
+  renderSelectedRuns();
 });
 
 // ── Metric selector ──────────────────────────────────────────────────────
 
-function renderMetricSelector() {
-  // Pre-select defaults that exist
-  if (selectedMetrics.size === 0) {
-    DEFAULT_METRICS.forEach(m => { if (allMetricNames.includes(m)) selectedMetrics.add(m); });
+function renderMetricSelector(forceDefaults) {
+  if (selectedMetrics.size === 0 || forceDefaults) {
+    selectedMetrics.clear();
+    getDefaultMetrics().forEach(m => { if (allMetricNames.includes(m)) selectedMetrics.add(m); });
   }
   renderMetricList();
   renderMetricPills();
@@ -420,6 +537,66 @@ $metricPills.addEventListener("click", e => {
 
 $metricSearch.addEventListener("input", renderMetricList);
 
+// ── Selected runs panel ──────────────────────────────────────────────────
+
+function getRunLabel(runId) {
+  if (customLegends.has(runId)) return customLegends.get(runId);
+  const run = allRuns.find(r => r.run_id === runId);
+  return run ? run.run_name : runId.slice(0, 8);
+}
+
+function getRunColor(runId) {
+  const ids = [...selectedRunIds];
+  const idx = ids.indexOf(runId);
+  return COLORS[idx >= 0 ? idx % COLORS.length : 0];
+}
+
+function renderSelectedRuns() {
+  const ids = [...selectedRunIds];
+  if (!ids.length) {
+    $selectedRunsSection.style.display = "none";
+    return;
+  }
+  $selectedRunsSection.style.display = "";
+
+  $selectedRunsList.innerHTML = ids.map((id, i) => {
+    const run = allRuns.find(r => r.run_id === id);
+    const name = run ? run.run_name : id.slice(0, 8);
+    const legend = customLegends.has(id) ? customLegends.get(id) : name;
+    const color = COLORS[i % COLORS.length];
+    const expName = experimentId || "";
+    return `<div class="sr-card" data-id="${id}">
+      <span class="sr-dot" style="background:${color}"></span>
+      <div class="sr-info">
+        <input class="sr-legend-input" type="text" value="${esc(legend)}" data-id="${id}" placeholder="${esc(name)}">
+        <div class="sr-exp" title="${esc(expName)}">${esc(expName)}</div>
+      </div>
+      <button class="sr-remove" data-id="${id}" title="Deselect run">&times;</button>
+    </div>`;
+  }).join("");
+}
+
+$selectedRunsList.addEventListener("input", e => {
+  if (!e.target.classList.contains("sr-legend-input")) return;
+  const id = e.target.dataset.id;
+  const val = e.target.value.trim();
+  const run = allRuns.find(r => r.run_id === id);
+  const defaultName = run ? run.run_name : id.slice(0, 8);
+  if (val && val !== defaultName) {
+    customLegends.set(id, val);
+  } else {
+    customLegends.delete(id);
+  }
+});
+
+$selectedRunsList.addEventListener("click", e => {
+  const btn = e.target.closest(".sr-remove");
+  if (!btn) return;
+  selectedRunIds.delete(btn.dataset.id);
+  renderTable();
+  renderSelectedRuns();
+});
+
 // ── Chart rendering ──────────────────────────────────────────────────────
 
 let lastChartData = null;
@@ -427,9 +604,6 @@ let lastChartMetrics = [];
 
 function renderCharts() {
   if (!lastChartData) return;
-  const data = lastChartData;
-  const metrics = lastChartMetrics;
-
   uplotInstances.forEach(u => u.destroy());
   uplotInstances = [];
   $chartGrid.innerHTML = "";
@@ -437,7 +611,7 @@ function renderCharts() {
   const cols = parseInt($colSlider.value, 10);
   $chartGrid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
 
-  drawChartsFromData(data, metrics);
+  drawChartsFromData(lastChartData, lastChartMetrics);
 }
 
 async function loadCharts() {
@@ -482,24 +656,42 @@ function drawChartsFromData(data, metrics) {
     byMetric[r.metric].push(r);
   });
 
-  const runMap = {};
-  allRuns.forEach(r => { runMap[r.run_id] = r; });
   const useWall = getXAxisMode() === "wall";
+  const yScaleMode = getYScale();
+  const smoothAlpha = getSmoothingFactor();
+  const groups = groupMetrics(metrics);
 
-  metrics.forEach(metric => {
+  groups.forEach(group => {
     const card = document.createElement("div");
     card.className = "chart-card";
+
+    const header = document.createElement("div");
+    header.className = "chart-header";
     const title = document.createElement("div");
     title.className = "chart-title";
-    title.textContent = metric + (useWall ? "  (wall time)" : "");
-    card.appendChild(title);
+    title.textContent = group.name + (useWall ? "  (wall time)" : "");
+    title.title = group.metrics.join(", ");
+    header.appendChild(title);
 
-    const entries = (byMetric[metric]||[]).filter(e => e.steps && e.steps.length > 0);
+    const toolbar = document.createElement("div");
+    toolbar.className = "chart-toolbar";
+    const resetBtn = document.createElement("button");
+    resetBtn.textContent = "Reset Zoom";
+    resetBtn.title = "Double-click chart to reset zoom";
+    toolbar.appendChild(resetBtn);
+    header.appendChild(toolbar);
+    card.appendChild(header);
 
-    if (!entries.length) {
+    const allEntries = [];
+    group.metrics.forEach(metric => {
+      const entries = (byMetric[metric]||[]).filter(e => e.steps && e.steps.length > 0);
+      entries.forEach(e => allEntries.push({ ...e, _metric: metric }));
+    });
+
+    if (!allEntries.length) {
       const empty = document.createElement("div");
       empty.className = "chart-empty";
-      empty.textContent = `No data for ${metric}`;
+      empty.textContent = `No data for ${group.name}`;
       card.appendChild(empty);
       $chartGrid.appendChild(card);
       return;
@@ -509,51 +701,67 @@ function drawChartsFromData(data, metrics) {
     card.appendChild(wrap);
     $chartGrid.appendChild(card);
 
-    let xArr, xIdx, xLabel, series, uData;
+    const multiMetric = group.metrics.length > 1;
+    let xArr, series, uData, xLabel;
 
-    if (useWall && entries[0].timestamps && entries[0].timestamps.length) {
+    if (useWall && allEntries[0].timestamps && allEntries[0].timestamps.length) {
       xLabel = "Hours";
-      const relSeries = entries.map(entry => {
+      const relData = allEntries.map(entry => {
         const t0 = entry.timestamps[0] || 0;
-        return entry.timestamps.map((ts, j) => ({
-          x: (ts - t0) / 3600000,
-          y: entry.values[j],
-        }));
+        return {
+          xs: entry.timestamps.map(ts => (ts - t0) / 3600000),
+          ys: entry.values,
+          entry,
+        };
       });
       const allX = new Set();
-      relSeries.forEach(s => s.forEach(p => allX.add(p.x)));
+      relData.forEach(d => d.xs.forEach(x => allX.add(x)));
       xArr = [...allX].sort((a, b) => a - b);
-      xIdx = {};
+      const xIdx = {};
       xArr.forEach((v, i) => { xIdx[v] = i; });
 
       series = [{ label: xLabel }];
       uData = [new Float64Array(xArr)];
-      entries.forEach((entry, i) => {
-        const run = runMap[entry.run_id];
-        const label = run ? `${run.run_name}  (${shortTime(run.start_time)})` : entry.run_id.slice(0, 8);
-        series.push({ label, stroke: COLORS[i % COLORS.length], width: 1.5 });
-        const yArr = new Float64Array(xArr.length).fill(NaN);
-        relSeries[i].forEach(p => { yArr[xIdx[p.x]] = p.y; });
+
+      relData.forEach((d, i) => {
+        const metricSuffix = multiMetric ? ` [${d.entry._metric.split("/").pop()}]` : "";
+        const label = getRunLabel(d.entry.run_id) + metricSuffix;
+        series.push({
+          label,
+          stroke: COLORS[i % COLORS.length],
+          width: 1.5,
+        });
+        let yArr = new Float64Array(xArr.length).fill(NaN);
+        for (let j = 0; j < d.xs.length; j++) {
+          yArr[xIdx[d.xs[j]]] = d.ys[j];
+        }
+        if (smoothAlpha > 0) yArr = emaSmooth(yArr, smoothAlpha);
         uData.push(yArr);
       });
     } else {
       xLabel = "Step";
       const allSteps = new Set();
-      entries.forEach(e => e.steps.forEach(s => allSteps.add(s)));
+      allEntries.forEach(e => e.steps.forEach(s => allSteps.add(s)));
       xArr = [...allSteps].sort((a, b) => a - b);
-      xIdx = {};
+      const xIdx = {};
       xArr.forEach((v, i) => { xIdx[v] = i; });
 
       series = [{ label: xLabel }];
       uData = [new Float64Array(xArr)];
-      entries.forEach((entry, i) => {
-        const run = runMap[entry.run_id];
-        const label = run ? `${run.run_name}  (${shortTime(run.start_time)})` : entry.run_id.slice(0, 8);
-        series.push({ label, stroke: COLORS[i % COLORS.length], width: 1.5 });
-        const yArr = new Float64Array(xArr.length).fill(NaN);
+
+      allEntries.forEach((entry, i) => {
+        const metricSuffix = multiMetric ? ` [${entry._metric.split("/").pop()}]` : "";
+        const label = getRunLabel(entry.run_id) + metricSuffix;
+        series.push({
+          label,
+          stroke: COLORS[i % COLORS.length],
+          width: 1.5,
+        });
+        let yArr = new Float64Array(xArr.length).fill(NaN);
         for (let j = 0; j < entry.steps.length; j++) {
           yArr[xIdx[entry.steps[j]]] = entry.values[j];
         }
+        if (smoothAlpha > 0) yArr = emaSmooth(yArr, smoothAlpha);
         uData.push(yArr);
       });
     }
@@ -561,18 +769,138 @@ function drawChartsFromData(data, metrics) {
     const rect = wrap.getBoundingClientRect();
     const width = Math.max(rect.width || card.clientWidth - 20, 280);
 
+    const isLog = yScaleMode === "log";
+
+    const yAxisLabel = multiMetric ? group.name : group.metrics[0].split("/").pop();
+
     const opts = {
-      width, height: 240,
-      cursor: { drag: { x: true, y: true } },
-      scales: { x: { time: false } },
+      width,
+      height: 280,
+      cursor: {
+        drag: { x: true, y: true, uni: 50 },
+        focus: { prox: 30 },
+        sync: { key: "chartSync" },
+      },
+      select: {
+        show: true,
+      },
+      scales: {
+        x: { time: false },
+        y: {
+          distr: isLog ? 3 : 1,
+          auto: true,
+          range: (u, dMin, dMax) => {
+            if (isLog) {
+              const lo = dMin > 0 ? dMin : 1e-10;
+              return [lo, dMax > lo ? dMax : lo * 10];
+            }
+            if (dMin === dMax) return [dMin - 1, dMax + 1];
+            const pad = (dMax - dMin) * 0.05;
+            return [dMin - pad, dMax + pad];
+          },
+        },
+      },
       axes: [
-        { label: xLabel, size: 30, font: "11px sans-serif", stroke: "#9ca3af", grid: { stroke: "#363840", width: 1 } },
-        { label: metric.split("/").pop(), size: 50, font: "11px sans-serif", stroke: "#9ca3af", grid: { stroke: "#363840", width: 1 } },
+        {
+          label: xLabel,
+          size: 35,
+          font: "11px -apple-system, BlinkMacSystemFont, sans-serif",
+          stroke: "#9ca3af",
+          ticks: { stroke: "#363840", width: 1 },
+          grid: { stroke: "#2a2c34", width: 1 },
+        },
+        {
+          label: yAxisLabel,
+          size: 55,
+          font: "11px -apple-system, BlinkMacSystemFont, sans-serif",
+          stroke: "#9ca3af",
+          ticks: { stroke: "#363840", width: 1 },
+          grid: { stroke: "#2a2c34", width: 1 },
+        },
       ],
+      hooks: {
+        setSelect: [
+          function(u) {
+            const sel = u.select;
+            if (sel.width < 2 && sel.height < 2) return;
+
+            const xMin = u.posToVal(sel.left, "x");
+            const xMax = u.posToVal(sel.left + sel.width, "x");
+            const yMin = u.posToVal(sel.top + sel.height, "y");
+            const yMax = u.posToVal(sel.top, "y");
+
+            u.setScale("x", { min: xMin, max: xMax });
+            u.setScale("y", { min: yMin, max: yMax });
+
+            sel.width = 0;
+            sel.height = 0;
+          }
+        ],
+      },
       series,
-      legend: { show: true },
+      legend: {
+        show: true,
+        live: true,
+      },
     };
+
     const u = new uPlot(opts, uData, wrap);
+
+    // Store original data range for reset
+    const origXMin = xArr[0];
+    const origXMax = xArr[xArr.length - 1];
+
+    function resetZoom() {
+      u.setScale("x", { min: origXMin, max: origXMax });
+      let gMin = Infinity, gMax = -Infinity;
+      for (let si = 1; si < uData.length; si++) {
+        for (let j = 0; j < uData[si].length; j++) {
+          const v = uData[si][j];
+          if (!isNaN(v)) {
+            if (v < gMin) gMin = v;
+            if (v > gMax) gMax = v;
+          }
+        }
+      }
+      if (gMin === Infinity) { gMin = 0; gMax = 1; }
+      if (isLog) {
+        gMin = gMin > 0 ? gMin : 1e-10;
+      } else {
+        const pad = (gMax - gMin) * 0.05 || 1;
+        gMin -= pad;
+        gMax += pad;
+      }
+      u.setScale("y", { min: gMin, max: gMax });
+    }
+
+    resetBtn.addEventListener("click", resetZoom);
+
+    // Double-click on the chart area to reset zoom
+    wrap.addEventListener("dblclick", resetZoom);
+
+    // Scroll wheel zoom on x-axis
+    wrap.addEventListener("wheel", e => {
+      e.preventDefault();
+      const cursor = u.cursor;
+      const left = cursor.left;
+      if (left == null || left < 0) return;
+
+      const xVal = u.posToVal(left, "x");
+      const scaleX = u.scales.x;
+      const xMin = scaleX.min;
+      const xMax = scaleX.max;
+      const range = xMax - xMin;
+
+      const zoomFactor = e.deltaY > 0 ? 1.15 : 1 / 1.15;
+      const newRange = range * zoomFactor;
+      const ratio = (xVal - xMin) / range;
+
+      const newMin = xVal - newRange * ratio;
+      const newMax = xVal + newRange * (1 - ratio);
+
+      u.setScale("x", { min: newMin, max: newMax });
+    }, { passive: false });
+
     uplotInstances.push(u);
   });
 }
@@ -586,7 +914,7 @@ window.addEventListener("resize", () => {
       const wrap = u.root.parentElement;
       if (wrap) {
         const w = wrap.clientWidth;
-        if (w > 0) u.setSize({ width: w, height: 240 });
+        if (w > 0) u.setSize({ width: w, height: 280 });
       }
     });
   }, 150);
@@ -616,25 +944,31 @@ $tagFilter.addEventListener("input", onFilterChange);
 $colSlider.addEventListener("input", () => {
   $colVal.textContent = $colSlider.value;
   $chartGrid.style.gridTemplateColumns = `repeat(${$colSlider.value}, 1fr)`;
-  // Resize existing charts
   setTimeout(() => {
     uplotInstances.forEach(u => {
       const wrap = u.root.parentElement;
       if (wrap) {
         const w = wrap.clientWidth;
-        if (w > 0) u.setSize({ width: w, height: 240 });
+        if (w > 0) u.setSize({ width: w, height: 280 });
       }
     });
   }, 50);
 });
 
+$smoothSlider.addEventListener("input", () => {
+  $smoothVal.textContent = $smoothSlider.value;
+});
+$smoothSlider.addEventListener("change", renderCharts);
+
 $selectAll.addEventListener("click", () => {
   getFilteredRuns().forEach(r => selectedRunIds.add(r.run_id));
   renderTable();
+  renderSelectedRuns();
 });
 $clearSel.addEventListener("click", () => {
   selectedRunIds.clear();
   renderTable();
+  renderSelectedRuns();
 });
 
 $copyFilter.addEventListener("click", () => {
@@ -653,6 +987,16 @@ $compareBtn.addEventListener("click", loadCharts);
 
 document.querySelectorAll('input[name="xaxis"]').forEach(radio => {
   radio.addEventListener("change", renderCharts);
+});
+document.querySelectorAll('input[name="yscale"]').forEach(radio => {
+  radio.addEventListener("change", renderCharts);
+});
+$groupMode.addEventListener("change", renderCharts);
+
+document.querySelectorAll('input[name="runtype"]').forEach(radio => {
+  radio.addEventListener("change", () => {
+    renderMetricSelector(true);
+  });
 });
 
 // Auto-load on page open
