@@ -1,12 +1,12 @@
 [project]
 name = "mlflow-compare-ui"
 version = "0.1.0"
-description = "A lightweight Streamlit app for browsing and comparing MLflow runs."
+description = "A lightweight Flask app for browsing and comparing MLflow runs."
 requires-python = ">=3.11"
 dependencies = [
-    "streamlit",
+    "flask",
     "mlflow",
-    "pandas",
-    "plotly",
-    "watchdog",
+    "orjson",
+    "cachetools",
+    "requests",
 ]

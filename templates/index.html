@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MLflow Compare</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.min.css">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0f1117;--bg2:#1a1c25;--bg3:#262830;--border:#363840;
+  --fg:#e6e6e9;--fg2:#9ca3af;--accent:#6366f1;--accent2:#818cf8;
+  --green:#22c55e;--red:#ef4444;--yellow:#eab308;
+  --radius:6px;
+}
+html{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:13px;background:var(--bg);color:var(--fg)}
+body{padding:0;min-height:100vh}
+a{color:var(--accent2)}
+
+/* Layout */
+.topbar{display:flex;align-items:center;gap:12px;padding:10px 20px;background:var(--bg2);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100}
+.topbar h1{font-size:16px;font-weight:600;white-space:nowrap}
+.topbar input[type=text]{flex:1;max-width:420px;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg);color:var(--fg);font-size:13px}
+.topbar input[type=text]:focus{outline:none;border-color:var(--accent)}
+
+.main{display:flex;gap:0;height:calc(100vh - 45px)}
+.sidebar{width:240px;min-width:200px;background:var(--bg2);border-right:1px solid var(--border);padding:14px;overflow-y:auto;flex-shrink:0}
+.content{flex:1;padding:16px 20px;overflow-y:auto}
+
+/* Sidebar sections */
+.sb-section{margin-bottom:18px}
+.sb-section h3{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--fg2);margin-bottom:8px}
+.sb-section input[type=text]{width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg);color:var(--fg);font-size:12px;margin-bottom:6px}
+.sb-section input[type=text]:focus{outline:none;border-color:var(--accent)}
+.sb-section label{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--fg2);cursor:pointer}
+.sb-section input[type=range]{width:100%;accent-color:var(--accent)}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;gap:4px;padding:5px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg3);color:var(--fg);font-size:12px;cursor:pointer;white-space:nowrap;transition:background .1s}
+.btn:hover{background:var(--border)}
+.btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn-primary:hover{background:var(--accent2)}
+.btn-sm{padding:3px 8px;font-size:11px}
+.btn-group{display:flex;gap:6px;flex-wrap:wrap}
+
+/* Table */
+.run-table-wrap{overflow-x:auto;margin-bottom:16px;border:1px solid var(--border);border-radius:var(--radius)}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{position:sticky;top:0;background:var(--bg2);text-align:left;padding:7px 10px;border-bottom:1px solid var(--border);font-weight:600;color:var(--fg2);font-size:11px;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
+td{padding:5px 10px;border-bottom:1px solid var(--border);vertical-align:middle}
+tr:hover td{background:var(--bg2)}
+td.mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:11px;color:var(--fg2)}
+.status-badge{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600;text-transform:uppercase}
+.status-FINISHED{background:#166534;color:#bbf7d0}
+.status-RUNNING{background:#854d0e;color:#fef08a}
+.status-FAILED{background:#991b1b;color:#fecaca}
+.tag-chip{display:inline-block;padding:1px 5px;margin:1px 2px;border-radius:3px;background:var(--bg3);color:var(--fg2);font-size:10px;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* Metric selector */
+.metric-selector{margin-bottom:16px}
+.ms-box{border:1px solid var(--border);border-radius:var(--radius);background:var(--bg);max-height:180px;overflow-y:auto;padding:4px}
+.ms-box label{display:flex;align-items:center;gap:6px;padding:3px 6px;border-radius:3px;font-size:12px;cursor:pointer}
+.ms-box label:hover{background:var(--bg2)}
+.ms-box input[type=checkbox]{accent-color:var(--accent)}
+.ms-search{width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg);color:var(--fg);font-size:12px;margin-bottom:4px}
+.ms-search:focus{outline:none;border-color:var(--accent)}
+.ms-selected{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.ms-pill{display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border-radius:12px;background:var(--accent);color:#fff;font-size:11px;cursor:pointer}
+.ms-pill:hover{background:var(--red)}
+.ms-pill::after{content:"×";font-weight:bold}
+
+/* Chart grid */
+.chart-grid{display:grid;gap:14px;margin-top:14px}
+.chart-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:10px}
+.chart-title{font-size:12px;font-weight:600;margin-bottom:6px;color:var(--fg2)}
+.chart-empty{padding:30px;text-align:center;color:var(--fg2);font-size:12px}
+
+/* Toast / info bar */
+.info-bar{padding:8px 14px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);color:var(--fg2);font-size:12px;margin-bottom:12px}
+.info-bar.error{border-color:var(--red);color:var(--red)}
+.info-bar.success{border-color:var(--green);color:var(--green)}
+
+/* Loading spinner */
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Scrollbar */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--fg2)}
+
+/* Responsive */
+@media(max-width:768px){
+  .sidebar{display:none}
+  .main{flex-direction:column}
+}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>MLflow Compare</h1>
+  <input type="text" id="expInput" placeholder="Experiment name, e.g. group/experiment">
+  <button class="btn btn-primary" id="loadBtn">Load</button>
+  <button class="btn" id="refreshBtn" title="Clear cache &amp; reload">&#x21bb; Refresh</button>
+  <span id="topStatus"></span>
+</div>
+
+<div class="main">
+  <div class="sidebar">
+    <div class="sb-section">
+      <h3>Filters</h3>
+      <input type="text" id="nameFilter" placeholder="Filter by run name…">
+      <input type="text" id="tagFilter" placeholder="Filter by tags…">
+    </div>
+    <div class="sb-section">
+      <h3>Charts per row</h3>
+      <input type="range" id="colSlider" min="1" max="4" value="3">
+      <div style="text-align:center;color:var(--fg2);font-size:11px"><span id="colVal">3</span></div>
+    </div>
+    <div class="sb-section">
+      <h3>Actions</h3>
+      <div class="btn-group" style="flex-direction:column">
+        <button class="btn btn-sm" id="selectAllBtn">Select all visible</button>
+        <button class="btn btn-sm" id="clearSelBtn">Clear selection</button>
+        <button class="btn btn-sm" id="copyFilterBtn">Copy MLflow filter</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="content">
+    <div id="infoArea"></div>
+
+    <div id="expInfo" style="margin-bottom:10px;font-size:11px;color:var(--fg2)"></div>
+
+    <!-- Runs table -->
+    <div id="tableSection" style="display:none">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <h2 style="font-size:14px;font-weight:600">Runs <span id="runCount" style="color:var(--fg2);font-weight:400"></span></h2>
+      </div>
+      <div class="run-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:30px"><input type="checkbox" id="thCheckAll" title="Toggle all visible"></th>
+              <th>Run Name</th>
+              <th>Start Time</th>
+              <th>Status</th>
+              <th>Run ID</th>
+              <th>Tags</th>
+            </tr>
+          </thead>
+          <tbody id="runTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Metric selector -->
+    <div id="metricSection" style="display:none">
+      <h2 style="font-size:14px;font-weight:600;margin-bottom:8px">Metric Comparison</h2>
+      <div class="metric-selector">
+        <input type="text" class="ms-search" id="metricSearch" placeholder="Search metrics…">
+        <div class="ms-box" id="metricBox"></div>
+        <div class="ms-selected" id="metricPills"></div>
+        <div style="margin-top:8px">
+          <button class="btn btn-primary btn-sm" id="compareBtn">Compare</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Charts -->
+    <div id="chartGrid" class="chart-grid"></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
+<script>
+(function(){
+"use strict";
+
+const DEFAULT_METRICS = [
+  "actor/episode_return_mean",
+  "actor/connected_ratio_mean",
+  "actor/is_fully_connected_mean",
+  "trainer/total_loss_mean",
+  "trainer/clip_fraction_mean",
+  "trainer/critic_stats/vf_loss_mean",
+  "trainer/entropy_stats/policy_mean",
+];
+
+const COLORS = [
+  "#6366f1","#22c55e","#f59e0b","#ef4444","#06b6d4","#ec4899",
+  "#8b5cf6","#14b8a6","#f97316","#64748b","#a3e635","#e879f9",
+];
+
+const defaultGroup = {{ default_group|tojson }};
+const defaultExperiment = {{ default_experiment|tojson }};
+
+let allRuns = [];
+let allMetricNames = [];
+let selectedRunIds = new Set();
+let selectedMetrics = new Set();
+let experimentId = null;
+let uplotInstances = [];
+
+// DOM refs
+const $exp = document.getElementById("expInput");
+const $loadBtn = document.getElementById("loadBtn");
+const $refreshBtn = document.getElementById("refreshBtn");
+const $topStatus = document.getElementById("topStatus");
+const $nameFilter = document.getElementById("nameFilter");
+const $tagFilter = document.getElementById("tagFilter");
+const $colSlider = document.getElementById("colSlider");
+const $colVal = document.getElementById("colVal");
+const $selectAll = document.getElementById("selectAllBtn");
+const $clearSel = document.getElementById("clearSelBtn");
+const $copyFilter = document.getElementById("copyFilterBtn");
+const $info = document.getElementById("infoArea");
+const $expInfo = document.getElementById("expInfo");
+const $tableSection = document.getElementById("tableSection");
+const $runCount = document.getElementById("runCount");
+const $tbody = document.getElementById("runTableBody");
+const $thCheckAll = document.getElementById("thCheckAll");
+const $metricSection = document.getElementById("metricSection");
+const $metricSearch = document.getElementById("metricSearch");
+const $metricBox = document.getElementById("metricBox");
+const $metricPills = document.getElementById("metricPills");
+const $compareBtn = document.getElementById("compareBtn");
+const $chartGrid = document.getElementById("chartGrid");
+
+// ── Helpers ──────────────────────────────────────────────────────────────
+
+function showInfo(msg, cls) {
+  $info.innerHTML = `<div class="info-bar ${cls||""}">${msg}</div>`;
+}
+function clearInfo() { $info.innerHTML = ""; }
+function showStatus(html) { $topStatus.innerHTML = html; }
+function clearStatus() { $topStatus.innerHTML = ""; }
+
+async function api(url, opts) {
+  const resp = await fetch(url, opts);
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+  return data;
+}
+
+function formatTime(iso) {
+  const d = new Date(iso);
+  return d.toLocaleString("en-US", {year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false});
+}
+
+function shortTime(iso) {
+  const d = new Date(iso);
+  const mm = String(d.getMonth()+1).padStart(2,"0");
+  const dd = String(d.getDate()).padStart(2,"0");
+  const hh = String(d.getHours()).padStart(2,"0");
+  const mi = String(d.getMinutes()).padStart(2,"0");
+  return `${mm}/${dd} ${hh}:${mi}`;
+}
+
+function getFilteredRuns() {
+  const nf = $nameFilter.value.toLowerCase();
+  const tf = $tagFilter.value.toLowerCase();
+  return allRuns.filter(r => {
+    if (nf && !r.run_name.toLowerCase().includes(nf)) return false;
+    if (tf && !r.tags_list.some(t => t.toLowerCase().includes(tf))) return false;
+    return true;
+  });
+}
+
+// ── Load experiment & runs ───────────────────────────────────────────────
+
+async function loadExperiment() {
+  const name = $exp.value.trim();
+  if (!name) return showInfo("Enter an experiment name.", "error");
+
+  clearInfo();
+  showStatus('<span class="spinner"></span> Loading…');
+  $tableSection.style.display = "none";
+  $metricSection.style.display = "none";
+  $chartGrid.innerHTML = "";
+
+  try {
+    const expData = await api(`/api/experiment?name=${encodeURIComponent(name)}`);
+    experimentId = expData.experiment_id;
+    $expInfo.textContent = `Experiment ID: ${experimentId}`;
+
+    const runsData = await api(`/api/runs?experiment_id=${encodeURIComponent(experimentId)}`);
+    allRuns = runsData.runs;
+
+    if (!allRuns.length) {
+      clearStatus();
+      return showInfo("No runs found for this experiment.", "");
+    }
+
+    // Collect metric names from runs
+    const metricSet = new Set();
+    allRuns.forEach(r => (r.metric_keys||[]).forEach(k => metricSet.add(k)));
+    allMetricNames = [...metricSet].sort();
+
+    // Keep only selections that still exist
+    selectedRunIds = new Set([...selectedRunIds].filter(id => allRuns.some(r => r.run_id === id)));
+
+    renderTable();
+    renderMetricSelector();
+    $tableSection.style.display = "";
+    $metricSection.style.display = "";
+    clearStatus();
+  } catch (err) {
+    clearStatus();
+    showInfo(err.message, "error");
+  }
+}
+
+// ── Table rendering ──────────────────────────────────────────────────────
+
+function renderTable() {
+  const filtered = getFilteredRuns();
+  $runCount.textContent = `(${filtered.length} of ${allRuns.length})`;
+
+  const html = filtered.map(r => {
+    const checked = selectedRunIds.has(r.run_id) ? "checked" : "";
+    const tags = (r.tags_list||[]).map(t => `<span class="tag-chip" title="${t}">${t}</span>`).join("");
+    return `<tr>
+      <td><input type="checkbox" class="run-cb" data-id="${r.run_id}" ${checked}></td>
+      <td>${esc(r.run_name)}</td>
+      <td style="white-space:nowrap">${formatTime(r.start_time)}</td>
+      <td><span class="status-badge status-${r.status}">${r.status}</span></td>
+      <td class="mono">${r.run_id}</td>
+      <td>${tags}</td>
+    </tr>`;
+  }).join("");
+  $tbody.innerHTML = html;
+
+  // Update header checkbox
+  const allChecked = filtered.length > 0 && filtered.every(r => selectedRunIds.has(r.run_id));
+  $thCheckAll.checked = allChecked;
+  $thCheckAll.indeterminate = !allChecked && filtered.some(r => selectedRunIds.has(r.run_id));
+}
+
+function esc(s) {
+  const d = document.createElement("div");
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// Checkbox events (event delegation)
+$tbody.addEventListener("change", e => {
+  if (!e.target.classList.contains("run-cb")) return;
+  const id = e.target.dataset.id;
+  if (e.target.checked) selectedRunIds.add(id); else selectedRunIds.delete(id);
+  // Update header checkbox state without full re-render
+  const filtered = getFilteredRuns();
+  const allChecked = filtered.length > 0 && filtered.every(r => selectedRunIds.has(r.run_id));
+  $thCheckAll.checked = allChecked;
+  $thCheckAll.indeterminate = !allChecked && filtered.some(r => selectedRunIds.has(r.run_id));
+});
+
+$thCheckAll.addEventListener("change", () => {
+  const filtered = getFilteredRuns();
+  if ($thCheckAll.checked) {
+    filtered.forEach(r => selectedRunIds.add(r.run_id));
+  } else {
+    filtered.forEach(r => selectedRunIds.delete(r.run_id));
+  }
+  renderTable();
+});
+
+// ── Metric selector ──────────────────────────────────────────────────────
+
+function renderMetricSelector() {
+  // Pre-select defaults that exist
+  if (selectedMetrics.size === 0) {
+    DEFAULT_METRICS.forEach(m => { if (allMetricNames.includes(m)) selectedMetrics.add(m); });
+  }
+  renderMetricList();
+  renderMetricPills();
+}
+
+function renderMetricList() {
+  const q = $metricSearch.value.toLowerCase();
+  const filtered = q ? allMetricNames.filter(m => m.toLowerCase().includes(q)) : allMetricNames;
+  $metricBox.innerHTML = filtered.map(m => {
+    const checked = selectedMetrics.has(m) ? "checked" : "";
+    return `<label><input type="checkbox" class="metric-cb" data-m="${esc(m)}" ${checked}><span>${esc(m)}</span></label>`;
+  }).join("");
+}
+
+function renderMetricPills() {
+  $metricPills.innerHTML = [...selectedMetrics].map(m =>
+    `<span class="ms-pill" data-m="${esc(m)}">${esc(m)}</span>`
+  ).join("");
+}
+
+$metricBox.addEventListener("change", e => {
+  if (!e.target.classList.contains("metric-cb")) return;
+  const m = e.target.dataset.m;
+  if (e.target.checked) selectedMetrics.add(m); else selectedMetrics.delete(m);
+  renderMetricPills();
+});
+
+$metricPills.addEventListener("click", e => {
+  const pill = e.target.closest(".ms-pill");
+  if (!pill) return;
+  selectedMetrics.delete(pill.dataset.m);
+  renderMetricList();
+  renderMetricPills();
+});
+
+$metricSearch.addEventListener("input", renderMetricList);
+
+// ── Chart rendering ──────────────────────────────────────────────────────
+
+async function loadCharts() {
+  const runIds = [...selectedRunIds];
+  const metrics = [...selectedMetrics];
+
+  if (!runIds.length) return showInfo("Select one or more runs above to compare metrics.");
+  if (!metrics.length) return showInfo("Select one or more metrics above to view charts.");
+
+  clearInfo();
+  showStatus('<span class="spinner"></span> Loading metrics…');
+
+  // Destroy old charts
+  uplotInstances.forEach(u => u.destroy());
+  uplotInstances = [];
+  $chartGrid.innerHTML = "";
+
+  try {
+    const data = await api("/api/metric-history", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({run_ids: runIds, metrics}),
+    });
+
+    const cols = parseInt($colSlider.value, 10);
+    $chartGrid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+
+    // Group results by metric
+    const byMetric = {};
+    data.results.forEach(r => {
+      if (!byMetric[r.metric]) byMetric[r.metric] = [];
+      byMetric[r.metric].push(r);
+    });
+
+    // Build a run_id -> run info map
+    const runMap = {};
+    allRuns.forEach(r => { runMap[r.run_id] = r; });
+
+    metrics.forEach(metric => {
+      const card = document.createElement("div");
+      card.className = "chart-card";
+      const title = document.createElement("div");
+      title.className = "chart-title";
+      title.textContent = metric;
+      card.appendChild(title);
+
+      const entries = (byMetric[metric]||[]).filter(e => e.steps && e.steps.length > 0);
+
+      if (!entries.length) {
+        const empty = document.createElement("div");
+        empty.className = "chart-empty";
+        empty.textContent = `No data for ${metric}`;
+        card.appendChild(empty);
+        $chartGrid.appendChild(card);
+        return;
+      }
+
+      const wrap = document.createElement("div");
+      card.appendChild(wrap);
+      $chartGrid.appendChild(card);
+
+      // Build uPlot data: [xValues, ...ySeriesPerRun]
+      // Each run may have different x-values, so we union them
+      const allSteps = new Set();
+      entries.forEach(e => e.steps.forEach(s => allSteps.add(s)));
+      const xArr = [...allSteps].sort((a,b) => a - b);
+      const xIdx = {};
+      xArr.forEach((v,i) => { xIdx[v] = i; });
+
+      const series = [{ label: "Step" }];
+      const uData = [new Float64Array(xArr)];
+
+      entries.forEach((entry, i) => {
+        const run = runMap[entry.run_id];
+        const label = run ? `${run.run_name}  (${shortTime(run.start_time)})` : entry.run_id.slice(0,8);
+        series.push({
+          label,
+          stroke: COLORS[i % COLORS.length],
+          width: 1.5,
+        });
+        const yArr = new Float64Array(xArr.length).fill(NaN);
+        for (let j = 0; j < entry.steps.length; j++) {
+          yArr[xIdx[entry.steps[j]]] = entry.values[j];
+        }
+        uData.push(yArr);
+      });
+
+      const rect = wrap.getBoundingClientRect();
+      const width = Math.max(rect.width || card.clientWidth - 20, 280);
+
+      const opts = {
+        width,
+        height: 240,
+        cursor: { drag: { x: true, y: true } },
+        scales: { x: { time: false } },
+        axes: [
+          { label: "Step", size: 30, font: "11px sans-serif", stroke: "#9ca3af", grid: { stroke: "#363840", width: 1 } },
+          { label: metric.split("/").pop(), size: 50, font: "11px sans-serif", stroke: "#9ca3af", grid: { stroke: "#363840", width: 1 } },
+        ],
+        series,
+        legend: { show: true },
+      };
+
+      const u = new uPlot(opts, uData, wrap);
+      uplotInstances.push(u);
+    });
+
+    clearStatus();
+  } catch (err) {
+    clearStatus();
+    showInfo(err.message, "error");
+  }
+}
+
+// Resize charts on window resize (debounced)
+let resizeTimer;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    uplotInstances.forEach(u => {
+      const wrap = u.root.parentElement;
+      if (wrap) {
+        const w = wrap.clientWidth;
+        if (w > 0) u.setSize({ width: w, height: 240 });
+      }
+    });
+  }, 150);
+});
+
+// ── Event wiring ─────────────────────────────────────────────────────────
+
+$exp.value = `${defaultGroup}/${defaultExperiment}`;
+
+$loadBtn.addEventListener("click", loadExperiment);
+$exp.addEventListener("keydown", e => { if (e.key === "Enter") loadExperiment(); });
+
+$refreshBtn.addEventListener("click", async () => {
+  showStatus('<span class="spinner"></span> Clearing cache…');
+  try { await api("/api/clear-cache", {method:"POST"}); } catch(e) {}
+  loadExperiment();
+});
+
+let filterDebounce;
+function onFilterChange() {
+  clearTimeout(filterDebounce);
+  filterDebounce = setTimeout(renderTable, 80);
+}
+$nameFilter.addEventListener("input", onFilterChange);
+$tagFilter.addEventListener("input", onFilterChange);
+
+$colSlider.addEventListener("input", () => {
+  $colVal.textContent = $colSlider.value;
+  $chartGrid.style.gridTemplateColumns = `repeat(${$colSlider.value}, 1fr)`;
+  // Resize existing charts
+  setTimeout(() => {
+    uplotInstances.forEach(u => {
+      const wrap = u.root.parentElement;
+      if (wrap) {
+        const w = wrap.clientWidth;
+        if (w > 0) u.setSize({ width: w, height: 240 });
+      }
+    });
+  }, 50);
+});
+
+$selectAll.addEventListener("click", () => {
+  getFilteredRuns().forEach(r => selectedRunIds.add(r.run_id));
+  renderTable();
+});
+$clearSel.addEventListener("click", () => {
+  selectedRunIds.clear();
+  renderTable();
+});
+
+$copyFilter.addEventListener("click", () => {
+  if (!selectedRunIds.size) return showInfo("No runs selected.", "error");
+  const ids = [...selectedRunIds].sort().map(id => `'${id}'`).join(", ");
+  const filter = `attributes.run_id IN (${ids})`;
+  navigator.clipboard.writeText(filter).then(() => {
+    showInfo("MLflow filter copied to clipboard!", "success");
+    setTimeout(clearInfo, 2000);
+  }).catch(() => {
+    showInfo(`<code>${filter}</code>`, "");
+  });
+});
+
+$compareBtn.addEventListener("click", loadCharts);
+
+// Auto-load on page open
+loadExperiment();
+
+})();
+</script>
+</body>
+</html>

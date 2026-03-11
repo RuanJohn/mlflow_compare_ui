@@ -1,218 +1,238 @@
-"""MLflow Run Comparison UI – a lightweight Streamlit app."""
+"""MLflow Run Comparison UI -- lightweight Flask app.
+
+Usage:
+    MLFLOW_TRACKING_URI=<uri> python app.py [--group-name G] [--experiment-name E]
+    # Then open http://localhost:5050
+"""
 
 from __future__ import annotations
 
 import argparse
+import logging
+import os
 import sys
+from base64 import b64encode
+from typing import Any
 
-import pandas as pd
-import plotly.express as px
-import streamlit as st
+import mlflow
+import orjson
+from flask import Flask, Response, render_template, request
+from mlflow.exceptions import MlflowException
 
 from mlflow_utils import (
+    batch_metric_history,
+    clear_caches,
     get_experiment_by_name,
-    get_metric_history_df,
     list_metric_names,
     list_runs,
 )
 
-parser = argparse.ArgumentParser(description="MLflow Run Comparison UI")
-parser.add_argument("--group-name", default="your-group", help="Default experiment group name")
-parser.add_argument("--experiment-name", default="some-exp", help="Default experiment name")
-args = parser.parse_args(sys.argv[1:])
+log = logging.getLogger(__name__)
 
-DEFAULT_EXPERIMENT_TO_SHOW = f"{args.group_name}/{args.experiment_name}"
+app = Flask(__name__)
 
-DEFAULT_METRICS = [
-    "actor/episode_return_mean",
-    "actor/connected_ratio_mean",
-    "actor/is_fully_connected_mean",
-    "trainer/total_loss_mean",
-    "trainer/clip_fraction_mean",
-    "trainer/critic_stats/vf_loss_mean",
-    "trainer/entropy_stats/policy_mean",
-]
+_cli_defaults: dict[str, str] = {}
 
-# ── page config ──────────────────────────────────────────────────────────────
-st.set_page_config(page_title="MLflow Compare", layout="wide")
-st.title("MLflow Run Comparison")
 
-# ── session state defaults ───────────────────────────────────────────────────
-if "selected_run_ids" not in st.session_state:
-    st.session_state.selected_run_ids = set()
+def json_response(data: Any, status: int = 200) -> Response:
+    """Return a Response with orjson-serialised JSON body."""
+    return Response(
+        orjson.dumps(data, option=orjson.OPT_NON_STR_KEYS),
+        status=status,
+        content_type="application/json",
+    )
 
-# ── sidebar: experiment selector ─────────────────────────────────────────────
-with st.sidebar:
-    st.header("Experiment")
-    experiment_name = st.text_input("Experiment name", value=DEFAULT_EXPERIMENT_TO_SHOW)
 
-    if st.button("🔄 Refresh data"):
-        list_runs.clear()
-        get_metric_history_df.clear()
-        st.rerun()
+# ── Error handlers ───────────────────────────────────────────────────────────
 
-# ── resolve experiment ───────────────────────────────────────────────────────
-experiment = get_experiment_by_name(experiment_name)
-if experiment is None:
-    st.error(f'Experiment **"{experiment_name}"** not found on the tracking server.')
-    st.stop()
+@app.errorhandler(404)
+def handle_not_found(exc):
+    return json_response({"error": "Not found"}, 404)
 
-experiment_id = experiment.experiment_id
-st.caption(f"Experiment ID: `{experiment_id}`")
 
-# ── load runs ────────────────────────────────────────────────────────────────
-with st.spinner("Loading runs…"):
-    runs_df = list_runs(experiment_id)
+@app.errorhandler(Exception)
+def handle_exception(exc):
+    if isinstance(exc, MlflowException):
+        msg = str(exc)
+        if "403" in msg or "Forbidden" in msg:
+            return json_response({
+                "error": "MLflow returned 403 Forbidden. Check MLFLOW_TRACKING_USERNAME and MLFLOW_TRACKING_PASSWORD."
+            }, 403)
+        if "401" in msg or "Unauthorized" in msg:
+            return json_response({
+                "error": "MLflow returned 401 Unauthorized. Check MLFLOW_TRACKING_USERNAME and MLFLOW_TRACKING_PASSWORD."
+            }, 401)
+        return json_response({"error": msg}, 502)
+    log.exception("Unhandled error")
+    return json_response({"error": str(exc)}, 500)
 
-if runs_df.empty:
-    st.warning("No runs found for this experiment.")
-    st.stop()
 
-# ── sidebar: filters ─────────────────────────────────────────────────────────
-with st.sidebar:
-    st.header("Filters")
-    name_filter = st.text_input("Filter by run name")
-    tag_filter = st.text_input("Filter by tags")
+# ── Routes ───────────────────────────────────────────────────────────────────
 
-filtered = runs_df.copy()
-if name_filter:
-    filtered = filtered[filtered["run_name"].str.contains(name_filter, case=False, na=False)]
-if tag_filter:
-    filtered = filtered[
-        filtered["tags_list"].apply(
-            lambda tags: any(tag_filter.lower() in t.lower() for t in tags)
+@app.route("/")
+def index():
+    return render_template(
+        "index.html",
+        default_group=_cli_defaults.get("group_name", "your-group"),
+        default_experiment=_cli_defaults.get("experiment_name", "some-exp"),
+    )
+
+
+@app.route("/api/experiment")
+def api_experiment():
+    name = request.args.get("name", "").strip()
+    if not name:
+        return json_response({"error": "Missing 'name' parameter"}, 400)
+    result = get_experiment_by_name(name)
+    if result is None:
+        return json_response({"error": f"Experiment '{name}' not found"}, 404)
+    return json_response(result)
+
+
+@app.route("/api/runs")
+def api_runs():
+    experiment_id = request.args.get("experiment_id", "").strip()
+    if not experiment_id:
+        return json_response({"error": "Missing 'experiment_id' parameter"}, 400)
+    runs = list_runs(experiment_id)
+    return json_response({"runs": runs})
+
+
+@app.route("/api/metric-names")
+def api_metric_names():
+    experiment_id = request.args.get("experiment_id", "").strip()
+    if not experiment_id:
+        return json_response({"error": "Missing 'experiment_id' parameter"}, 400)
+    runs = list_runs(experiment_id)
+    names = list_metric_names(runs)
+    return json_response({"metrics": names})
+
+
+@app.route("/api/metric-history", methods=["POST"])
+def api_metric_history():
+    body = request.get_json(silent=True) or {}
+    run_ids = body.get("run_ids", [])
+    metrics = body.get("metrics", [])
+    if not run_ids or not metrics:
+        return json_response(
+            {"error": "Both 'run_ids' and 'metrics' are required"}, 400
         )
+    results = batch_metric_history(run_ids, metrics)
+    return json_response({"results": results})
+
+
+@app.route("/api/clear-cache", methods=["POST"])
+def api_clear_cache():
+    clear_caches()
+    return json_response({"ok": True})
+
+
+# ── Startup helpers ──────────────────────────────────────────────────────────
+
+def check_connectivity() -> None:
+    """Probe the MLflow server to find the API and test connectivity."""
+    import requests
+
+    uri = os.environ["MLFLOW_TRACKING_URI"].rstrip("/")
+    username = os.environ.get("MLFLOW_TRACKING_USERNAME", "")
+    password = os.environ.get("MLFLOW_TRACKING_PASSWORD", "")
+    token = os.environ.get("MLFLOW_TRACKING_TOKEN", "")
+    insecure = os.environ.get("MLFLOW_TRACKING_INSECURE_TLS", "").lower() in (
+        "true", "1", "yes",
+    )
+
+    headers: dict[str, str] = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    elif username and password:
+        encoded = b64encode(f"{username}:{password}".encode()).decode()
+        headers["Authorization"] = f"Basic {encoded}"
+
+    print("\nProbing MLflow API location:")
+
+    probe_paths = [
+        "/api/2.0/mlflow/experiments/search",
+        "/mlflow/api/2.0/mlflow/experiments/search",
+        "/ajax-api/2.0/mlflow/experiments/search",
     ]
 
-if filtered.empty:
-    st.info("No runs match the current filters.")
-    st.stop()
+    for path in probe_paths:
+        url = f"{uri}{path}?max_results=1"
+        try:
+            resp = requests.get(url, headers=headers, timeout=10, verify=not insecure)
+            print(f"  {path} -> {resp.status_code}")
+            if resp.status_code == 200:
+                print("  FOUND! API base is at this path.\n")
+                return
+        except Exception as exc:
+            print(f"  {path} -> error: {exc}")
 
-# ── select / clear actions ───────────────────────────────────────────────────
-col_a, col_b, _ = st.columns([1, 1, 4])
-with col_a:
-    if st.button("Select all visible"):
-        st.session_state.selected_run_ids = set(filtered["run_id"])
-        st.rerun()
-with col_b:
-    if st.button("Clear selection"):
-        st.session_state.selected_run_ids = set()
-        st.rerun()
+    try:
+        resp = requests.get(
+            uri, headers=headers, timeout=10, verify=not insecure, allow_redirects=False
+        )
+        print(f"\n  GET {uri} -> {resp.status_code}")
+        if resp.status_code in (301, 302, 307, 308):
+            print(f"  Redirects to: {resp.headers.get('Location', '?')}")
+        else:
+            print(f"  Content-Type: {resp.headers.get('Content-Type', '?')}")
+            print(f"  Body (first 300 chars): {resp.text[:300]}")
+    except Exception as exc:
+        print(f"  GET {uri} -> error: {exc}")
 
-# ── run table ────────────────────────────────────────────────────────────────
-st.subheader("Runs")
+    print("\n  Could not find MLflow API. The tracking URI might need a subpath.\n")
 
-selected_ids: set[str] = st.session_state.selected_run_ids
 
-display_rows: list[dict] = []
-for _, row in filtered.iterrows():
-    display_rows.append(
-        {
-            "selected": row["run_id"] in selected_ids,
-            "run_name": row["run_name"],
-            "start_time": row["start_time"].strftime("%Y-%m-%d %H:%M:%S"),
-            "status": row["status"],
-            "run_id": row["run_id"],
-            "tags": row["tags_list"],
-        }
+def main() -> None:
+    logging.basicConfig(level=logging.INFO)
+
+    parser = argparse.ArgumentParser(description="MLflow Run Comparison UI")
+    parser.add_argument(
+        "--group-name", default="your-group", help="Default experiment group name"
+    )
+    parser.add_argument(
+        "--experiment-name", default="some-exp", help="Default experiment name"
+    )
+    parser.add_argument("--port", type=int, default=5050, help="Port to listen on")
+    parser.add_argument("--host", default="127.0.0.1", help="Host to bind to")
+    args = parser.parse_args()
+
+    _cli_defaults["group_name"] = args.group_name
+    _cli_defaults["experiment_name"] = args.experiment_name
+
+    if not os.environ.get("MLFLOW_TRACKING_URI"):
+        print(
+            "ERROR: MLFLOW_TRACKING_URI environment variable is required.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    uri = os.environ["MLFLOW_TRACKING_URI"]
+    user = os.environ.get("MLFLOW_TRACKING_USERNAME", "(not set)")
+    token = os.environ.get("MLFLOW_TRACKING_TOKEN", "(not set)")
+    print(f"MLflow server:   {uri}")
+    print(f"MLflow user:     {user}")
+    print(f"MLflow token:    {'set' if token != '(not set)' else '(not set)'}")
+    print(
+        f"MLflow password: {'set' if os.environ.get('MLFLOW_TRACKING_PASSWORD') else '(not set)'}"
     )
 
-display_df = pd.DataFrame(display_rows)
-
-edited = st.data_editor(
-    display_df,
-    column_config={
-        "selected": st.column_config.CheckboxColumn("✔", default=False, width=35),
-        "run_name": st.column_config.TextColumn("Run Name", width=140),
-        "start_time": st.column_config.TextColumn("Start Time", width=145),
-        "status": st.column_config.TextColumn("Status", width=70),
-        "run_id": st.column_config.TextColumn("Run ID", width=260),
-        "tags": st.column_config.ListColumn("Tags", width=1500),
-    },
-    disabled=["run_name", "start_time", "status", "run_id", "tags"],
-    hide_index=True,
-    use_container_width=False,
-    key="run_table",
-)
-
-new_selected: set[str] = set()
-for idx, row in edited.iterrows():
-    if row["selected"]:
-        new_selected.add(row["run_id"])
-st.session_state.selected_run_ids = new_selected
-
-# ── MLflow filter export ─────────────────────────────────────────────────────
-if new_selected:
-    if st.button("📋 Copy MLflow filter for selected runs"):
-        ids = ", ".join(f"'{rid}'" for rid in sorted(new_selected))
-        mlflow_filter = f"attributes.run_id IN ({ids})"
-        st.code(mlflow_filter, language="text")
-
-# ── metric comparison ────────────────────────────────────────────────────────
-st.subheader("Metric Comparison")
-
-metric_names = list_metric_names(runs_df)
-if not metric_names:
-    st.info("No metrics recorded for these runs.")
-    st.stop()
-
-with st.sidebar:
-    st.header("Charts")
-    cols_per_row = st.slider("Charts per row", min_value=1, max_value=4, value=3)
-
-default_selection = [m for m in DEFAULT_METRICS if m in metric_names]
-selected_metrics = st.multiselect("Metrics", metric_names, default=default_selection)
-
-selected_runs_df = filtered[filtered["run_id"].isin(st.session_state.selected_run_ids)]
-
-if selected_runs_df.empty:
-    st.info("Select one or more runs above to compare metrics.")
-    st.stop()
-
-if not selected_metrics:
-    st.info("Select one or more metrics above to view charts.")
-    st.stop()
-
-
-# ── helper: build a single chart ─────────────────────────────────────────────
-def _build_chart(metric: str, runs: pd.DataFrame) -> px.line | None:
-    frames: list[pd.DataFrame] = []
-    for _, run_row in runs.iterrows():
-        hist = get_metric_history_df(run_row["run_id"], metric)
-        if hist.empty:
-            continue
-        label = f"{run_row['run_name']}  ({run_row['start_time'].strftime('%m/%d %H:%M')})"
-        hist = hist.assign(run=label)
-        frames.append(hist)
-    if not frames:
-        return None
-    chart_df = pd.concat(frames, ignore_index=True)
-    fig = px.line(
-        chart_df,
-        x="step",
-        y="value",
-        color="run",
-        labels={"step": "Step", "value": metric, "run": "Run"},
-        title=metric,
+    insecure = os.environ.get("MLFLOW_TRACKING_INSECURE_TLS", "").lower() in (
+        "true", "1", "yes",
     )
-    fig.update_layout(
-        legend=dict(orientation="h", yanchor="top", y=-0.25, xanchor="left", x=0),
-        margin=dict(l=40, r=20, t=40, b=20),
-        hovermode="x unified",
-    )
-    return fig
+    if insecure:
+        os.environ["MLFLOW_TRACKING_INSECURE_TLS"] = "true"
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    uri = uri.rstrip("/")
+    mlflow.set_tracking_uri(uri)
+
+    check_connectivity()
+
+    print(f"\n  Starting Flask on http://{args.host}:{args.port}\n")
+    app.run(host=args.host, port=args.port, debug=False, threaded=True)
 
 
-# ── tiled chart grid ─────────────────────────────────────────────────────────
-with st.spinner("Loading metric histories…"):
-    for i in range(0, len(selected_metrics), cols_per_row):
-        cols = st.columns(cols_per_row)
-        for j, col in enumerate(cols):
-            idx = i + j
-            if idx >= len(selected_metrics):
-                break
-            fig = _build_chart(selected_metrics[idx], selected_runs_df)
-            if fig is None:
-                col.warning(f"No data for **{selected_metrics[idx]}**")
-            else:
-                col.plotly_chart(fig, use_container_width=True)
+if __name__ == "__main__":
+    main()
