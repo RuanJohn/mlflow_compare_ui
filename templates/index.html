@@ -120,6 +120,11 @@ td.mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:11px;color:var(
       <div style="text-align:center;color:var(--fg2);font-size:11px"><span id="colVal">3</span></div>
     </div>
     <div class="sb-section">
+      <h3>X-Axis</h3>
+      <label><input type="radio" name="xaxis" value="step" checked> Step</label>
+      <label style="margin-top:4px"><input type="radio" name="xaxis" value="wall"> Relative Wall Time</label>
+    </div>
+    <div class="sb-section">
       <h3>Actions</h3>
       <div class="btn-group" style="flex-direction:column">
         <button class="btn btn-sm" id="selectAllBtn">Select all visible</button>
@@ -257,6 +262,11 @@ function shortTime(iso) {
   const hh = String(d.getHours()).padStart(2,"0");
   const mi = String(d.getMinutes()).padStart(2,"0");
   return `${mm}/${dd} ${hh}:${mi}`;
+}
+
+function getXAxisMode() {
+  const radio = document.querySelector('input[name="xaxis"]:checked');
+  return radio ? radio.value : "step";
 }
 
 function getFilteredRuns() {
@@ -412,6 +422,24 @@ $metricSearch.addEventListener("input", renderMetricList);
 
 // ── Chart rendering ──────────────────────────────────────────────────────
 
+let lastChartData = null;
+let lastChartMetrics = [];
+
+function renderCharts() {
+  if (!lastChartData) return;
+  const data = lastChartData;
+  const metrics = lastChartMetrics;
+
+  uplotInstances.forEach(u => u.destroy());
+  uplotInstances = [];
+  $chartGrid.innerHTML = "";
+
+  const cols = parseInt($colSlider.value, 10);
+  $chartGrid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+
+  drawChartsFromData(data, metrics);
+}
+
 async function loadCharts() {
   const runIds = [...selectedRunIds];
   const metrics = [...selectedMetrics];
@@ -422,7 +450,6 @@ async function loadCharts() {
   clearInfo();
   showStatus('<span class="spinner"></span> Loading metrics…');
 
-  // Destroy old charts
   uplotInstances.forEach(u => u.destroy());
   uplotInstances = [];
   $chartGrid.innerHTML = "";
@@ -434,94 +461,120 @@ async function loadCharts() {
       body: JSON.stringify({run_ids: runIds, metrics}),
     });
 
+    lastChartData = data;
+    lastChartMetrics = metrics;
+
     const cols = parseInt($colSlider.value, 10);
     $chartGrid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
 
-    // Group results by metric
-    const byMetric = {};
-    data.results.forEach(r => {
-      if (!byMetric[r.metric]) byMetric[r.metric] = [];
-      byMetric[r.metric].push(r);
-    });
+    drawChartsFromData(data, metrics);
+    clearStatus();
+  } catch (err) {
+    clearStatus();
+    showInfo(err.message, "error");
+  }
+}
 
-    // Build a run_id -> run info map
-    const runMap = {};
-    allRuns.forEach(r => { runMap[r.run_id] = r; });
+function drawChartsFromData(data, metrics) {
+  const byMetric = {};
+  data.results.forEach(r => {
+    if (!byMetric[r.metric]) byMetric[r.metric] = [];
+    byMetric[r.metric].push(r);
+  });
 
-    metrics.forEach(metric => {
-      const card = document.createElement("div");
-      card.className = "chart-card";
-      const title = document.createElement("div");
-      title.className = "chart-title";
-      title.textContent = metric;
-      card.appendChild(title);
+  const runMap = {};
+  allRuns.forEach(r => { runMap[r.run_id] = r; });
+  const useWall = getXAxisMode() === "wall";
 
-      const entries = (byMetric[metric]||[]).filter(e => e.steps && e.steps.length > 0);
+  metrics.forEach(metric => {
+    const card = document.createElement("div");
+    card.className = "chart-card";
+    const title = document.createElement("div");
+    title.className = "chart-title";
+    title.textContent = metric + (useWall ? "  (wall time)" : "");
+    card.appendChild(title);
 
-      if (!entries.length) {
-        const empty = document.createElement("div");
-        empty.className = "chart-empty";
-        empty.textContent = `No data for ${metric}`;
-        card.appendChild(empty);
-        $chartGrid.appendChild(card);
-        return;
-      }
+    const entries = (byMetric[metric]||[]).filter(e => e.steps && e.steps.length > 0);
 
-      const wrap = document.createElement("div");
-      card.appendChild(wrap);
+    if (!entries.length) {
+      const empty = document.createElement("div");
+      empty.className = "chart-empty";
+      empty.textContent = `No data for ${metric}`;
+      card.appendChild(empty);
       $chartGrid.appendChild(card);
+      return;
+    }
 
-      // Build uPlot data: [xValues, ...ySeriesPerRun]
-      // Each run may have different x-values, so we union them
-      const allSteps = new Set();
-      entries.forEach(e => e.steps.forEach(s => allSteps.add(s)));
-      const xArr = [...allSteps].sort((a,b) => a - b);
-      const xIdx = {};
-      xArr.forEach((v,i) => { xIdx[v] = i; });
+    const wrap = document.createElement("div");
+    card.appendChild(wrap);
+    $chartGrid.appendChild(card);
 
-      const series = [{ label: "Step" }];
-      const uData = [new Float64Array(xArr)];
+    let xArr, xIdx, xLabel, series, uData;
 
+    if (useWall && entries[0].timestamps && entries[0].timestamps.length) {
+      xLabel = "Hours";
+      const relSeries = entries.map(entry => {
+        const t0 = entry.timestamps[0] || 0;
+        return entry.timestamps.map((ts, j) => ({
+          x: (ts - t0) / 3600000,
+          y: entry.values[j],
+        }));
+      });
+      const allX = new Set();
+      relSeries.forEach(s => s.forEach(p => allX.add(p.x)));
+      xArr = [...allX].sort((a, b) => a - b);
+      xIdx = {};
+      xArr.forEach((v, i) => { xIdx[v] = i; });
+
+      series = [{ label: xLabel }];
+      uData = [new Float64Array(xArr)];
       entries.forEach((entry, i) => {
         const run = runMap[entry.run_id];
-        const label = run ? `${run.run_name}  (${shortTime(run.start_time)})` : entry.run_id.slice(0,8);
-        series.push({
-          label,
-          stroke: COLORS[i % COLORS.length],
-          width: 1.5,
-        });
+        const label = run ? `${run.run_name}  (${shortTime(run.start_time)})` : entry.run_id.slice(0, 8);
+        series.push({ label, stroke: COLORS[i % COLORS.length], width: 1.5 });
+        const yArr = new Float64Array(xArr.length).fill(NaN);
+        relSeries[i].forEach(p => { yArr[xIdx[p.x]] = p.y; });
+        uData.push(yArr);
+      });
+    } else {
+      xLabel = "Step";
+      const allSteps = new Set();
+      entries.forEach(e => e.steps.forEach(s => allSteps.add(s)));
+      xArr = [...allSteps].sort((a, b) => a - b);
+      xIdx = {};
+      xArr.forEach((v, i) => { xIdx[v] = i; });
+
+      series = [{ label: xLabel }];
+      uData = [new Float64Array(xArr)];
+      entries.forEach((entry, i) => {
+        const run = runMap[entry.run_id];
+        const label = run ? `${run.run_name}  (${shortTime(run.start_time)})` : entry.run_id.slice(0, 8);
+        series.push({ label, stroke: COLORS[i % COLORS.length], width: 1.5 });
         const yArr = new Float64Array(xArr.length).fill(NaN);
         for (let j = 0; j < entry.steps.length; j++) {
           yArr[xIdx[entry.steps[j]]] = entry.values[j];
         }
         uData.push(yArr);
       });
+    }
 
-      const rect = wrap.getBoundingClientRect();
-      const width = Math.max(rect.width || card.clientWidth - 20, 280);
+    const rect = wrap.getBoundingClientRect();
+    const width = Math.max(rect.width || card.clientWidth - 20, 280);
 
-      const opts = {
-        width,
-        height: 240,
-        cursor: { drag: { x: true, y: true } },
-        scales: { x: { time: false } },
-        axes: [
-          { label: "Step", size: 30, font: "11px sans-serif", stroke: "#9ca3af", grid: { stroke: "#363840", width: 1 } },
-          { label: metric.split("/").pop(), size: 50, font: "11px sans-serif", stroke: "#9ca3af", grid: { stroke: "#363840", width: 1 } },
-        ],
-        series,
-        legend: { show: true },
-      };
-
-      const u = new uPlot(opts, uData, wrap);
-      uplotInstances.push(u);
-    });
-
-    clearStatus();
-  } catch (err) {
-    clearStatus();
-    showInfo(err.message, "error");
-  }
+    const opts = {
+      width, height: 240,
+      cursor: { drag: { x: true, y: true } },
+      scales: { x: { time: false } },
+      axes: [
+        { label: xLabel, size: 30, font: "11px sans-serif", stroke: "#9ca3af", grid: { stroke: "#363840", width: 1 } },
+        { label: metric.split("/").pop(), size: 50, font: "11px sans-serif", stroke: "#9ca3af", grid: { stroke: "#363840", width: 1 } },
+      ],
+      series,
+      legend: { show: true },
+    };
+    const u = new uPlot(opts, uData, wrap);
+    uplotInstances.push(u);
+  });
 }
 
 // Resize charts on window resize (debounced)
@@ -597,6 +650,10 @@ $copyFilter.addEventListener("click", () => {
 });
 
 $compareBtn.addEventListener("click", loadCharts);
+
+document.querySelectorAll('input[name="xaxis"]').forEach(radio => {
+  radio.addEventListener("change", renderCharts);
+});
 
 // Auto-load on page open
 loadExperiment();

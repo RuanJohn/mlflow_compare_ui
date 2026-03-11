@@ -119,6 +119,7 @@ def _fetch_one_history(run_id: str, metric_name: str) -> dict[str, Any]:
         "metric": metric_name,
         "steps": [m.step for m in sorted_history],
         "values": [m.value for m in sorted_history],
+        "timestamps": [m.timestamp for m in sorted_history],
     }
 
     with _cache_lock:
