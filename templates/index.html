@@ -99,6 +99,11 @@ td.mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:11px;color:var(
 .param-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle}
 .params-empty{padding:20px;text-align:center;color:var(--fg2);font-size:12px}
 
+/* Poll indicator */
+.poll-indicator{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--fg2);padding:6px 0}
+.poll-dot{width:7px;height:7px;border-radius:50%;background:var(--green);animation:pulse-dot 2s ease-in-out infinite}
+@keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:.3}}
+
 /* Chart grid */
 .chart-grid{display:grid;gap:14px;margin-top:14px}
 .chart-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:10px;position:relative}
@@ -275,6 +280,9 @@ td.mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:11px;color:var(
     </div>
 
     <!-- Charts -->
+    <div id="pollIndicator" class="poll-indicator" style="display:none">
+      <span class="poll-dot"></span> Auto-refreshing every 30s
+    </div>
     <div id="chartGrid" class="chart-grid"></div>
   </div>
 </div>
@@ -327,6 +335,7 @@ let uplotInstances = [];
 const customLegends = new Map();
 let selectedParams = new Set();
 let paramsDiffOnly = false;
+let pollTimer = null;
 
 // DOM refs
 const $exp = document.getElementById("expInput");
@@ -472,6 +481,7 @@ function groupMetrics(metrics) {
 // ── Load experiment & runs ───────────────────────────────────────────────
 
 async function loadExperiment() {
+  stopPolling();
   const name = $exp.value.trim();
   if (!name) return showInfo("Enter an experiment name.", "error");
 
@@ -837,7 +847,56 @@ function renderCharts() {
   drawChartsFromData(lastChartData, lastChartMetrics);
 }
 
+// ── Auto-refresh polling ─────────────────────────────────────────────────
+
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+  updatePollIndicator();
+}
+
+function startPolling() {
+  stopPolling();
+  pollTimer = setInterval(pollMetrics, 30000);
+  updatePollIndicator();
+}
+
+async function pollMetrics() {
+  const runIds = [...selectedRunIds];
+  const metrics = lastChartMetrics;
+  if (!runIds.length || !metrics.length) {
+    stopPolling();
+    return;
+  }
+  try {
+    const data = await api("/api/metric-history", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({run_ids: runIds, metrics, skip_cache: true}),
+    });
+    lastChartData = data;
+    uplotInstances.forEach(u => u.destroy());
+    uplotInstances = [];
+    $chartGrid.innerHTML = "";
+    const cols = parseInt($colSlider.value, 10);
+    $chartGrid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+    drawChartsFromData(data, metrics);
+  } catch (err) {
+    console.warn("Auto-refresh poll failed:", err);
+  }
+}
+
+function updatePollIndicator() {
+  const el = document.getElementById("pollIndicator");
+  if (el) el.style.display = pollTimer ? "" : "none";
+}
+
+// ── Chart loading ────────────────────────────────────────────────────────
+
 async function loadCharts() {
+  stopPolling();
   const runIds = [...selectedRunIds];
   const metrics = [...selectedMetrics];
 
@@ -866,6 +925,7 @@ async function loadCharts() {
 
     drawChartsFromData(data, metrics);
     clearStatus();
+    startPolling();
   } catch (err) {
     clearStatus();
     showInfo(err.message, "error");
@@ -1197,6 +1257,7 @@ $selectAll.addEventListener("click", () => {
   renderSelectedRuns();
 });
 $clearSel.addEventListener("click", () => {
+  stopPolling();
   selectedRunIds.clear();
   renderTable();
   renderSelectedRuns();

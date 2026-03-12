@@ -117,7 +117,8 @@ def api_metric_history():
         return json_response(
             {"error": "Both 'run_ids' and 'metrics' are required"}, 400
         )
-    results = batch_metric_history(run_ids, metrics)
+    skip_cache = bool(body.get("skip_cache", False))
+    results = batch_metric_history(run_ids, metrics, skip_cache=skip_cache)
     return json_response({"results": results})
 
 

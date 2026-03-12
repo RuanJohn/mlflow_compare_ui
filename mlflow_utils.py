@@ -104,13 +104,16 @@ def list_metric_names(runs: list[dict[str, Any]]) -> list[str]:
     return sorted(names)
 
 
-def _fetch_one_history(run_id: str, metric_name: str) -> dict[str, Any]:
-    """Fetch a single metric history, using cache."""
+def _fetch_one_history(
+    run_id: str, metric_name: str, *, skip_cache: bool = False
+) -> dict[str, Any]:
+    """Fetch a single metric history, using cache unless skip_cache is set."""
     cache_key = (run_id, metric_name)
-    with _cache_lock:
-        cached = _metric_cache.get(cache_key)
-    if cached is not None:
-        return cached
+    if not skip_cache:
+        with _cache_lock:
+            cached = _metric_cache.get(cache_key)
+        if cached is not None:
+            return cached
 
     client = get_client()
     history = client.get_metric_history(run_id, metric_name)
@@ -129,7 +132,7 @@ def _fetch_one_history(run_id: str, metric_name: str) -> dict[str, Any]:
 
 
 def batch_metric_history(
-    run_ids: list[str], metrics: list[str]
+    run_ids: list[str], metrics: list[str], *, skip_cache: bool = False
 ) -> list[dict[str, Any]]:
     """Fetch metric histories for all (run_id, metric) pairs in parallel."""
     pairs = [(rid, m) for rid in run_ids for m in metrics]
@@ -137,7 +140,7 @@ def batch_metric_history(
         return []
 
     futures = {
-        _executor.submit(_fetch_one_history, rid, m): (rid, m)
+        _executor.submit(_fetch_one_history, rid, m, skip_cache=skip_cache): (rid, m)
         for rid, m in pairs
     }
 
