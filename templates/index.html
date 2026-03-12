@@ -555,9 +555,12 @@ function getRunLabel(runId) {
 }
 
 function getRunColor(runId) {
-  const ids = [...selectedRunIds];
-  const idx = ids.indexOf(runId);
-  return COLORS[idx >= 0 ? idx % COLORS.length : 0];
+  let idx = 0;
+  for (const id of selectedRunIds) {
+    if (id === runId) return COLORS[idx % COLORS.length];
+    idx++;
+  }
+  return COLORS[0];
 }
 
 function renderSelectedRuns() {
@@ -665,6 +668,15 @@ function drawChartsFromData(data, metrics) {
     byMetric[r.metric].push(r);
   });
 
+  // Stable color assignment: each run_id gets a fixed color index
+  // based on its position in selectedRunIds (insertion order)
+  const runColorMap = {};
+  let colorIdx = 0;
+  [...selectedRunIds].forEach(id => {
+    runColorMap[id] = COLORS[colorIdx % COLORS.length];
+    colorIdx++;
+  });
+
   const useWall = getXAxisMode() === "wall";
   const yScaleMode = getYScale();
   const smoothAlpha = getSmoothingFactor();
@@ -737,7 +749,7 @@ function drawChartsFromData(data, metrics) {
         const label = getRunLabel(d.entry.run_id) + metricSuffix;
         series.push({
           label,
-          stroke: COLORS[i % COLORS.length],
+          stroke: runColorMap[d.entry.run_id] || COLORS[i % COLORS.length],
           width: 1.5,
         });
         let yArr = new Float64Array(xArr.length).fill(NaN);
@@ -763,7 +775,7 @@ function drawChartsFromData(data, metrics) {
         const label = getRunLabel(entry.run_id) + metricSuffix;
         series.push({
           label,
-          stroke: COLORS[i % COLORS.length],
+          stroke: runColorMap[entry.run_id] || COLORS[i % COLORS.length],
           width: 1.5,
         });
         let yArr = new Float64Array(xArr.length).fill(NaN);
