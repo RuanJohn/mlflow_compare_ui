@@ -84,10 +84,10 @@ td.mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:11px;color:var(
 
 /* Parameters comparison */
 .params-table-wrap{overflow:auto;max-height:420px;border:1px solid var(--border);border-radius:var(--radius);margin-top:8px;margin-bottom:16px}
-.params-table{width:100%;border-collapse:collapse;font-size:12px}
+.params-table{border-collapse:collapse;font-size:12px}
 .params-table thead th{position:sticky;top:0;background:var(--bg2);text-align:left;padding:7px 10px;border-bottom:1px solid var(--border);font-weight:600;color:var(--fg2);font-size:11px;white-space:nowrap;z-index:2}
 .params-table thead th:first-child{position:sticky;left:0;z-index:3;background:var(--bg2)}
-.params-table tbody td{padding:5px 10px;border-bottom:1px solid var(--border);vertical-align:middle;font-size:12px;white-space:nowrap}
+.params-table tbody td{padding:5px 10px;border-bottom:1px solid var(--border);vertical-align:middle;font-size:12px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .params-table tbody td:first-child{position:sticky;left:0;background:var(--bg);z-index:1;font-family:"SF Mono",Menlo,Consolas,monospace;font-size:11px;color:var(--fg2)}
 .params-table tbody tr:hover td{background:var(--bg2)}
 .params-table tbody tr:hover td:first-child{background:var(--bg2)}
@@ -732,7 +732,7 @@ function renderParamsSection() {
     const unique = new Set(vals);
     const isDiff = unique.size > 1;
     const cells = vals.map(v =>
-      `<td class="${isDiff ? 'param-diff' : ''}">${esc(v)}</td>`
+      `<td class="${isDiff ? 'param-diff' : ''}" title="${esc(v)}">${esc(v)}</td>`
     ).join("");
     return `<tr><td>${esc(k)}</td>${cells}</tr>`;
   }).join("");
