@@ -375,6 +375,20 @@ function emaSmooth(values, alpha) {
   return out;
 }
 
+function fmtTickVal(self, ticks) {
+  if (!ticks || !ticks.length) return ticks;
+  const absMax = ticks.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+  if (absMax >= 1e9)       return ticks.map(v => (v / 1e9).toFixed(1) + "G");
+  if (absMax >= 1e6)       return ticks.map(v => (v / 1e6).toFixed(1) + "M");
+  if (absMax >= 1e4)       return ticks.map(v => (v / 1e3).toFixed(1) + "k");
+  if (absMax < 0.01 && absMax > 0) return ticks.map(v => v.toExponential(1));
+  return ticks.map(v => {
+    if (Number.isInteger(v)) return v.toString();
+    const s = v.toPrecision(4);
+    return parseFloat(s).toString();
+  });
+}
+
 function getFilteredRuns() {
   const nf = $nameFilter.value.toLowerCase();
   const tf = $tagFilter.value.toLowerCase();
@@ -829,6 +843,7 @@ function drawChartsFromData(data, metrics) {
           stroke: "#9ca3af",
           ticks: { stroke: "#363840", width: 1 },
           grid: { stroke: "#2a2c34", width: 1 },
+          values: fmtTickVal,
         },
         {
           label: yAxisLabel,
@@ -837,6 +852,7 @@ function drawChartsFromData(data, metrics) {
           stroke: "#9ca3af",
           ticks: { stroke: "#363840", width: 1 },
           grid: { stroke: "#2a2c34", width: 1 },
+          values: fmtTickVal,
         },
       ],
       hooks: {
