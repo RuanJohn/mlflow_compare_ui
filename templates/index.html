@@ -877,12 +877,15 @@ async function pollMetrics() {
       body: JSON.stringify({run_ids: runIds, metrics, skip_cache: true}),
     });
     lastChartData = data;
+    const scrollEl = document.querySelector(".content");
+    const savedScroll = scrollEl ? scrollEl.scrollTop : 0;
     uplotInstances.forEach(u => u.destroy());
     uplotInstances = [];
     $chartGrid.innerHTML = "";
     const cols = parseInt($colSlider.value, 10);
     $chartGrid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
     drawChartsFromData(data, metrics);
+    if (scrollEl) scrollEl.scrollTop = savedScroll;
   } catch (err) {
     console.warn("Auto-refresh poll failed:", err);
   }
