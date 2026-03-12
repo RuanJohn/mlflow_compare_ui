@@ -82,6 +82,23 @@ td.mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:11px;color:var(
 .sr-remove{background:none;border:none;color:var(--fg2);font-size:16px;cursor:pointer;padding:0 4px;line-height:1;flex-shrink:0}
 .sr-remove:hover{color:var(--red)}
 
+/* Parameters comparison */
+.params-table-wrap{overflow:auto;max-height:420px;border:1px solid var(--border);border-radius:var(--radius);margin-top:8px;margin-bottom:16px}
+.params-table{width:100%;border-collapse:collapse;font-size:12px}
+.params-table thead th{position:sticky;top:0;background:var(--bg2);text-align:left;padding:7px 10px;border-bottom:1px solid var(--border);font-weight:600;color:var(--fg2);font-size:11px;white-space:nowrap;z-index:2}
+.params-table thead th:first-child{position:sticky;left:0;z-index:3;background:var(--bg2)}
+.params-table tbody td{padding:5px 10px;border-bottom:1px solid var(--border);vertical-align:middle;font-size:12px;white-space:nowrap}
+.params-table tbody td:first-child{position:sticky;left:0;background:var(--bg);z-index:1;font-family:"SF Mono",Menlo,Consolas,monospace;font-size:11px;color:var(--fg2)}
+.params-table tbody tr:hover td{background:var(--bg2)}
+.params-table tbody tr:hover td:first-child{background:var(--bg2)}
+.param-diff{background:rgba(99,102,241,0.10) !important}
+.params-toggle-active{background:var(--accent) !important;border-color:var(--accent) !important;color:#fff !important}
+.param-search-results{max-height:150px;overflow-y:auto;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);display:none;margin-bottom:6px}
+.param-search-results .param-search-item{padding:5px 10px;font-size:12px;cursor:pointer;color:var(--fg)}
+.param-search-results .param-search-item:hover{background:var(--bg3)}
+.param-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle}
+.params-empty{padding:20px;text-align:center;color:var(--fg2);font-size:12px}
+
 /* Chart grid */
 .chart-grid{display:grid;gap:14px;margin-top:14px}
 .chart-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:10px;position:relative}
@@ -225,6 +242,25 @@ td.mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:11px;color:var(
       <div id="selectedRunsList" class="selected-runs"></div>
     </div>
 
+    <!-- Parameters comparison -->
+    <div id="paramsSection" style="display:none">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:6px">
+        <h2 style="font-size:14px;font-weight:600">Parameters</h2>
+        <div style="display:flex;align-items:center;gap:6px">
+          <button class="btn btn-sm" id="paramsDiffToggle">Show diffs only</button>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+        <input type="text" class="ms-search" id="paramSearch" placeholder="Type to search params…" style="margin-bottom:0;flex:1">
+        <button class="btn btn-primary btn-sm" id="paramAddBtn">Add</button>
+      </div>
+      <div id="paramSearchResults" class="param-search-results"></div>
+      <div class="ms-selected" id="paramPills"></div>
+      <div class="params-table-wrap" id="paramsTableWrap">
+        <table class="params-table" id="paramsTable"></table>
+      </div>
+    </div>
+
     <!-- Metric selector -->
     <div id="metricSection" style="display:none">
       <h2 style="font-size:14px;font-weight:600;margin-bottom:8px">Metric Comparison</h2>
@@ -289,6 +325,8 @@ let selectedMetrics = new Set();
 let experimentId = null;
 let uplotInstances = [];
 const customLegends = new Map();
+let selectedParams = new Set();
+let paramsDiffOnly = false;
 
 // DOM refs
 const $exp = document.getElementById("expInput");
@@ -319,6 +357,13 @@ const $smoothVal = document.getElementById("smoothVal");
 const $groupMode = document.getElementById("groupMode");
 const $selectedRunsSection = document.getElementById("selectedRunsSection");
 const $selectedRunsList = document.getElementById("selectedRunsList");
+const $paramsSection = document.getElementById("paramsSection");
+const $paramSearch = document.getElementById("paramSearch");
+const $paramAddBtn = document.getElementById("paramAddBtn");
+const $paramSearchResults = document.getElementById("paramSearchResults");
+const $paramPills = document.getElementById("paramPills");
+const $paramsTable = document.getElementById("paramsTable");
+const $paramsDiffToggle = document.getElementById("paramsDiffToggle");
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -584,6 +629,7 @@ function renderSelectedRuns() {
   const ids = [...selectedRunIds];
   if (!ids.length) {
     $selectedRunsSection.style.display = "none";
+    renderParamsSection();
     return;
   }
   $selectedRunsSection.style.display = "";
@@ -603,6 +649,8 @@ function renderSelectedRuns() {
       <button class="sr-remove" data-id="${id}" title="Deselect run">&times;</button>
     </div>`;
   }).join("");
+
+  renderParamsSection();
 }
 
 $selectedRunsList.addEventListener("input", e => {
@@ -624,6 +672,152 @@ $selectedRunsList.addEventListener("click", e => {
   selectedRunIds.delete(btn.dataset.id);
   renderTable();
   renderSelectedRuns();
+});
+
+// ── Parameters comparison ────────────────────────────────────────────────
+
+function getAllParamKeys() {
+  const ids = [...selectedRunIds];
+  const keys = new Set();
+  ids.forEach(id => {
+    const run = allRuns.find(r => r.run_id === id);
+    if (run && run.params) Object.keys(run.params).forEach(k => keys.add(k));
+  });
+  return [...keys].sort();
+}
+
+function renderParamsSection() {
+  const ids = [...selectedRunIds];
+  if (!ids.length) {
+    $paramsSection.style.display = "none";
+    return;
+  }
+  $paramsSection.style.display = "";
+
+  const runs = ids.map((id, i) => {
+    const run = allRuns.find(r => r.run_id === id);
+    const name = customLegends.has(id) ? customLegends.get(id) : (run ? run.run_name : id.slice(0, 8));
+    const color = COLORS[i % COLORS.length];
+    return { id, run, name, color, params: (run && run.params) ? run.params : {} };
+  });
+
+  let paramKeys = getAllParamKeys();
+
+  if (selectedParams.size > 0) {
+    paramKeys = paramKeys.filter(k => selectedParams.has(k));
+  }
+
+  if (paramsDiffOnly) {
+    paramKeys = paramKeys.filter(k => {
+      const vals = runs.map(r => r.params[k] ?? "");
+      return new Set(vals).size > 1;
+    });
+  }
+
+  renderParamPills();
+
+  if (!paramKeys.length) {
+    $paramsTable.innerHTML = `<tr><td class="params-empty" colspan="${runs.length + 1}">${
+      paramsDiffOnly ? "No differing parameters found." : "No parameters available."
+    }</td></tr>`;
+    return;
+  }
+
+  const headerCells = `<th>Parameter</th>` + runs.map(r =>
+    `<th><span class="param-dot" style="background:${r.color}"></span>${esc(r.name)}</th>`
+  ).join("");
+
+  const bodyRows = paramKeys.map(k => {
+    const vals = runs.map(r => r.params[k] ?? "");
+    const unique = new Set(vals);
+    const isDiff = unique.size > 1;
+    const cells = vals.map(v =>
+      `<td class="${isDiff ? 'param-diff' : ''}">${esc(v)}</td>`
+    ).join("");
+    return `<tr><td>${esc(k)}</td>${cells}</tr>`;
+  }).join("");
+
+  $paramsTable.innerHTML = `<thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}</tbody>`;
+}
+
+function renderParamPills() {
+  if (!selectedParams.size) {
+    $paramPills.innerHTML = "";
+    return;
+  }
+  $paramPills.innerHTML = [...selectedParams].map(p =>
+    `<span class="ms-pill" data-param="${esc(p)}">${esc(p)}</span>`
+  ).join("");
+}
+
+$paramsDiffToggle.addEventListener("click", () => {
+  paramsDiffOnly = !paramsDiffOnly;
+  $paramsDiffToggle.classList.toggle("params-toggle-active", paramsDiffOnly);
+  renderParamsSection();
+});
+
+$paramSearch.addEventListener("input", () => {
+  const q = $paramSearch.value.toLowerCase().trim();
+  if (!q) {
+    $paramSearchResults.style.display = "none";
+    $paramSearchResults.innerHTML = "";
+    return;
+  }
+  const allKeys = getAllParamKeys();
+  const matches = allKeys.filter(k => k.toLowerCase().includes(q) && !selectedParams.has(k)).slice(0, 20);
+  if (!matches.length) {
+    $paramSearchResults.style.display = "none";
+    return;
+  }
+  $paramSearchResults.style.display = "";
+  $paramSearchResults.innerHTML = matches.map(k =>
+    `<div class="param-search-item" data-key="${esc(k)}">${esc(k)}</div>`
+  ).join("");
+});
+
+$paramSearchResults.addEventListener("click", e => {
+  const item = e.target.closest(".param-search-item");
+  if (!item) return;
+  selectedParams.add(item.dataset.key);
+  $paramSearch.value = "";
+  $paramSearchResults.style.display = "none";
+  $paramSearchResults.innerHTML = "";
+  renderParamsSection();
+});
+
+$paramAddBtn.addEventListener("click", () => {
+  const q = $paramSearch.value.trim();
+  if (!q) return;
+  const allKeys = getAllParamKeys();
+  const exact = allKeys.find(k => k === q);
+  const match = exact || allKeys.find(k => k.toLowerCase().includes(q.toLowerCase()));
+  if (match) {
+    selectedParams.add(match);
+    $paramSearch.value = "";
+    $paramSearchResults.style.display = "none";
+    $paramSearchResults.innerHTML = "";
+    renderParamsSection();
+  }
+});
+
+$paramSearch.addEventListener("keydown", e => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    $paramAddBtn.click();
+  }
+});
+
+$paramPills.addEventListener("click", e => {
+  const pill = e.target.closest(".ms-pill");
+  if (!pill) return;
+  selectedParams.delete(pill.dataset.param);
+  renderParamsSection();
+});
+
+document.addEventListener("click", e => {
+  if (!$paramSearch.contains(e.target) && !$paramSearchResults.contains(e.target)) {
+    $paramSearchResults.style.display = "none";
+  }
 });
 
 // ── Chart rendering ──────────────────────────────────────────────────────

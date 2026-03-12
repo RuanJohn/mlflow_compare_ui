@@ -88,6 +88,7 @@ def list_runs(experiment_id: str) -> list[dict[str, Any]]:
             "tags": tags,
             "tags_list": tags_to_list(tags),
             "metric_keys": sorted(r.data.metrics.keys()) if r.data.metrics else [],
+            "params": dict(r.data.params) if r.data.params else {},
         })
 
     with _cache_lock:
