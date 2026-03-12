@@ -11,6 +11,7 @@ import argparse
 import logging
 import os
 import sys
+import threading
 from base64 import b64encode
 from typing import Any
 
@@ -230,6 +231,22 @@ def main() -> None:
     mlflow.set_tracking_uri(uri)
 
     check_connectivity()
+
+    def prefetch_default_experiment():
+        """Warm the runs cache for the default experiment in the background."""
+        exp_name = f"{args.group_name}/{args.experiment_name}"
+        try:
+            exp = get_experiment_by_name(exp_name)
+            if exp:
+                log.info("Prefetching runs for %s …", exp_name)
+                runs = list_runs(exp["experiment_id"])
+                log.info("Prefetch complete: %d runs cached.", len(runs))
+            else:
+                log.info("Prefetch: experiment %s not found, skipping.", exp_name)
+        except Exception as exc:
+            log.warning("Prefetch failed: %s", exc)
+
+    threading.Thread(target=prefetch_default_experiment, daemon=True).start()
 
     print(f"\n  Starting Flask on http://{args.host}:{args.port}\n")
     app.run(host=args.host, port=args.port, debug=False, threaded=True)
