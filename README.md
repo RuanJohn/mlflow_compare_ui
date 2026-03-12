@@ -47,7 +47,7 @@ Additional flags:
 - `--port` — port to listen on (default: 5050)
 - `--host` — host to bind to (default: 127.0.0.1)
 
-The app opens in your browser at `http://localhost:5050`.
+The app opens in your browser at `http://localhost:5050`. The default experiment's run data is prefetched in the background on startup, so the first page load is typically fast.
 
 ## Usage
 
@@ -78,6 +78,16 @@ When runs are selected, a panel appears below the table showing each run with:
 
 Custom legend names are used in chart legends and persist across re-renders.
 
+### Parameters comparison
+
+Below the selected runs panel, a parameters comparison table appears automatically when runs are selected. It displays all run parameters in a scrollable table with:
+
+- **Rows** = parameter names, **Columns** = selected runs (with colored dots matching chart colors)
+- **Search and filter** — type in the search box and click **Add** to filter to specific parameters, shown as removable pills
+- **Show diffs only** — toggle button that filters the table to only show parameters that differ between the selected runs, with differing cells highlighted
+- **Sticky headers** — the parameter name column and header row stay visible while scrolling
+- Long values are truncated with ellipsis; hover any cell to see the full value in a tooltip
+
 ### Run type toggle
 
 Switch between **Training** and **Evaluation** in the sidebar to swap the default metric presets. Training mode pre-selects common RL training metrics; evaluation mode pre-selects evaluation/postprocessing metrics.
@@ -88,6 +98,10 @@ Switch between **Training** and **Evaluation** in the sidebar to swap the defaul
 - Search and check/uncheck metrics, or click the × on a pill to remove
 - Click **Compare** to fetch and render charts
 - Each selected metric gets its own chart tile (or grouped — see below)
+
+### Auto-refresh
+
+After clicking **Compare**, charts automatically refresh every 30 seconds by fetching fresh metric data (bypassing the cache) for the selected runs and metrics. A pulsing green indicator appears above the charts when auto-refresh is active. Polling stops when you load a new experiment, click Compare again, or clear the selection.
 
 ### Chart interactions
 
@@ -112,19 +126,16 @@ All chart settings are in the sidebar and take effect instantly (no re-fetch nee
 | **Smoothing** | EMA slider (0–0.99), like TensorBoard |
 | **Chart Grouping** | One chart per metric / Auto-group by prefix / All on one chart |
 
-### Exporting a filter for the MLflow UI
+### Sharing and exporting views
 
-Click **Copy MLflow filter** in the sidebar to copy a filter string like:
-
-```
-attributes.run_id IN ('abc123', 'def456')
-```
-
-Paste this into the MLflow UI search bar to view the same runs there.
+- **Share URL** — encodes the full view state (experiment, selected runs, metrics, settings) into a URL hash you can send to others
+- **Export .json** — downloads the current view state as a JSON file
+- **Import .json** — restores a previously exported view, including run selections and metric choices
+- **Copy MLflow filter** — copies a filter string like `attributes.run_id IN ('abc123', 'def456')` for use in the MLflow UI search bar
 
 ### Refreshing data
 
-Click the **↻ Refresh** button in the top bar to clear the server-side cache and re-fetch everything. Data is cached for 2 minutes by default.
+Click the **↻ Refresh** button in the top bar to clear the server-side cache and re-fetch everything. Run metadata is cached for 2 minutes by default; auto-refresh bypasses the cache for metric data only.
 
 ## Project Structure
 
@@ -143,8 +154,8 @@ mlflow_compare_ui/
 
 The app is a Flask backend serving a single-page vanilla JS frontend:
 
-- **Backend** (`app.py` + `mlflow_utils.py`): API endpoints for experiment resolution, run listing, and batch metric history. Uses a singleton `MlflowClient`, `TTLCache` for 120s caching, `ThreadPoolExecutor` with 16 workers for parallel metric fetches, and `orjson` for fast JSON serialization.
-- **Frontend** (`templates/index.html`): All UI state and filtering lives in the browser. Charts render with uPlot (~35KB, canvas-based). No build step required.
+- **Backend** (`app.py` + `mlflow_utils.py`): API endpoints for experiment resolution, run listing (including parameters), and batch metric history. Uses a singleton `MlflowClient`, `TTLCache` for 120s caching, `ThreadPoolExecutor` with 16 workers for parallel metric fetches, and `orjson` for fast JSON serialization. The default experiment is prefetched in a background thread at startup to warm the cache.
+- **Frontend** (`templates/index.html`): All UI state and filtering lives in the browser. Charts render with uPlot (~35KB, canvas-based). No build step required. Metric data for active charts is auto-refreshed every 30 seconds.
 
 ## Configuration
 
