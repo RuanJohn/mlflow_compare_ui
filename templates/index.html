@@ -243,7 +243,10 @@ td.mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:11px;color:var(
 
     <!-- Selected runs legend panel -->
     <div id="selectedRunsSection" style="display:none">
-      <h2 style="font-size:14px;font-weight:600;margin-bottom:8px">Selected Runs</h2>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <h2 style="font-size:14px;font-weight:600">Selected Runs</h2>
+        <button class="btn btn-sm" id="unselectAllBtn">Unselect all</button>
+      </div>
       <div id="selectedRunsList" class="selected-runs"></div>
     </div>
 
@@ -680,6 +683,13 @@ $selectedRunsList.addEventListener("click", e => {
   const btn = e.target.closest(".sr-remove");
   if (!btn) return;
   selectedRunIds.delete(btn.dataset.id);
+  renderTable();
+  renderSelectedRuns();
+});
+
+document.getElementById("unselectAllBtn").addEventListener("click", () => {
+  stopPolling();
+  selectedRunIds.clear();
   renderTable();
   renderSelectedRuns();
 });
