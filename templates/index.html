@@ -178,6 +178,15 @@ td.mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:11px;color:var(
         <button class="btn btn-sm" id="copyFilterBtn">Copy MLflow filter</button>
       </div>
     </div>
+    <div class="sb-section">
+      <h3>View</h3>
+      <div class="btn-group" style="flex-direction:column">
+        <button class="btn btn-sm" id="shareViewBtn">Share URL</button>
+        <button class="btn btn-sm" id="exportViewBtn">Export .json</button>
+        <button class="btn btn-sm" id="importViewBtn">Import .json</button>
+      </div>
+      <input type="file" id="importFileInput" accept=".json" style="display:none">
+    </div>
   </div>
 
   <div class="content">
@@ -922,8 +931,6 @@ window.addEventListener("resize", () => {
 
 // ── Event wiring ─────────────────────────────────────────────────────────
 
-$exp.value = `${defaultGroup}/${defaultExperiment}`;
-
 $loadBtn.addEventListener("click", loadExperiment);
 $exp.addEventListener("keydown", e => { if (e.key === "Enter") loadExperiment(); });
 
@@ -999,8 +1006,197 @@ document.querySelectorAll('input[name="runtype"]').forEach(radio => {
   });
 });
 
-// Auto-load on page open
-loadExperiment();
+// ── View state persistence ───────────────────────────────────────────────
+
+function serializeViewState() {
+  const legends = {};
+  customLegends.forEach((v, k) => { legends[k] = v; });
+  return {
+    v: 1,
+    experiment: $exp.value.trim(),
+    runs: [...selectedRunIds],
+    metrics: [...selectedMetrics],
+    legends,
+    settings: {
+      runType: (document.querySelector('input[name="runtype"]:checked') || {}).value || "training",
+      xaxis: getXAxisMode(),
+      yscale: getYScale(),
+      smoothing: getSmoothingFactor(),
+      colsPerRow: parseInt($colSlider.value, 10),
+      grouping: $groupMode.value,
+    },
+  };
+}
+
+function applyViewState(state) {
+  if (!state || !state.experiment) return false;
+
+  // Set experiment
+  $exp.value = state.experiment;
+
+  // Settings
+  const s = state.settings || {};
+  if (s.runType) {
+    const radio = document.querySelector(`input[name="runtype"][value="${s.runType}"]`);
+    if (radio) radio.checked = true;
+  }
+  if (s.xaxis) {
+    const radio = document.querySelector(`input[name="xaxis"][value="${s.xaxis}"]`);
+    if (radio) radio.checked = true;
+  }
+  if (s.yscale) {
+    const radio = document.querySelector(`input[name="yscale"][value="${s.yscale}"]`);
+    if (radio) radio.checked = true;
+  }
+  if (s.smoothing != null) {
+    $smoothSlider.value = s.smoothing;
+    $smoothVal.textContent = s.smoothing;
+  }
+  if (s.colsPerRow) {
+    $colSlider.value = s.colsPerRow;
+    $colVal.textContent = s.colsPerRow;
+  }
+  if (s.grouping) {
+    $groupMode.value = s.grouping;
+  }
+
+  // Legends
+  customLegends.clear();
+  if (state.legends) {
+    Object.entries(state.legends).forEach(([k, v]) => customLegends.set(k, v));
+  }
+
+  // Runs and metrics will be applied after experiment loads
+  const pendingRuns = state.runs || [];
+  const pendingMetrics = state.metrics || [];
+
+  return { pendingRuns, pendingMetrics };
+}
+
+function encodeViewHash(state) {
+  const json = JSON.stringify(state);
+  return btoa(unescape(encodeURIComponent(json)));
+}
+
+function decodeViewHash(hash) {
+  try {
+    const json = decodeURIComponent(escape(atob(hash)));
+    return JSON.parse(json);
+  } catch { return null; }
+}
+
+// Share URL
+document.getElementById("shareViewBtn").addEventListener("click", () => {
+  const state = serializeViewState();
+  const hash = encodeViewHash(state);
+  const url = `${location.origin}${location.pathname}#view=${hash}`;
+  navigator.clipboard.writeText(url).then(() => {
+    showInfo("Shareable URL copied to clipboard!", "success");
+    setTimeout(clearInfo, 2500);
+  }).catch(() => {
+    history.replaceState(null, "", `#view=${hash}`);
+    showInfo("URL updated in address bar. Copy it to share.", "success");
+    setTimeout(clearInfo, 2500);
+  });
+});
+
+// Export JSON
+document.getElementById("exportViewBtn").addEventListener("click", () => {
+  const state = serializeViewState();
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  const expName = $exp.value.trim().replace(/\//g, "_") || "view";
+  a.download = `mlflow-view_${expName}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+// Import JSON
+const $importFile = document.getElementById("importFileInput");
+document.getElementById("importViewBtn").addEventListener("click", () => {
+  $importFile.click();
+});
+$importFile.addEventListener("change", () => {
+  const file = $importFile.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const state = JSON.parse(reader.result);
+      restoreFromState(state);
+    } catch (err) {
+      showInfo("Invalid view file: " + err.message, "error");
+    }
+  };
+  reader.readAsText(file);
+  $importFile.value = "";
+});
+
+async function restoreFromState(state) {
+  const pending = applyViewState(state);
+  if (!pending) return showInfo("Invalid view state.", "error");
+
+  clearInfo();
+  showStatus('<span class="spinner"></span> Restoring view…');
+  $tableSection.style.display = "none";
+  $metricSection.style.display = "none";
+  $chartGrid.innerHTML = "";
+
+  try {
+    const expData = await api(`/api/experiment?name=${encodeURIComponent($exp.value.trim())}`);
+    experimentId = expData.experiment_id;
+    $expInfo.textContent = `Experiment ID: ${experimentId}`;
+
+    const runsData = await api(`/api/runs?experiment_id=${encodeURIComponent(experimentId)}`);
+    allRuns = runsData.runs;
+
+    if (!allRuns.length) {
+      clearStatus();
+      return showInfo("No runs found for this experiment.", "");
+    }
+
+    const metricSet = new Set();
+    allRuns.forEach(r => (r.metric_keys||[]).forEach(k => metricSet.add(k)));
+    allMetricNames = [...metricSet].sort();
+
+    // Restore selections — only keep IDs that still exist
+    const validIds = new Set(allRuns.map(r => r.run_id));
+    selectedRunIds = new Set(pending.pendingRuns.filter(id => validIds.has(id)));
+    selectedMetrics = new Set(pending.pendingMetrics.filter(m => allMetricNames.includes(m)));
+
+    renderTable();
+    renderSelectedRuns();
+    renderMetricList();
+    renderMetricPills();
+    $tableSection.style.display = "";
+    $metricSection.style.display = "";
+    clearStatus();
+
+    // Auto-compare if we have selections
+    if (selectedRunIds.size && selectedMetrics.size) {
+      loadCharts();
+    }
+  } catch (err) {
+    clearStatus();
+    showInfo(err.message, "error");
+  }
+}
+
+// ── Startup ──────────────────────────────────────────────────────────────
+
+(function init() {
+  const hash = location.hash;
+  if (hash.startsWith("#view=")) {
+    const state = decodeViewHash(hash.slice(6));
+    if (state) {
+      restoreFromState(state);
+      return;
+    }
+  }
+  $exp.value = `${defaultGroup}/${defaultExperiment}`;
+  loadExperiment();
+})();
 
 })();
 </script>
