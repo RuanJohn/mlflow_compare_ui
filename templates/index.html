@@ -889,12 +889,23 @@ async function pollMetrics() {
     lastChartData = data;
     const scrollEl = document.querySelector(".content");
     const savedScroll = scrollEl ? scrollEl.scrollTop : 0;
+    const savedZooms = uplotInstances.map(u => ({
+      x: { min: u.scales.x.min, max: u.scales.x.max },
+      y: { min: u.scales.y.min, max: u.scales.y.max },
+    }));
     uplotInstances.forEach(u => u.destroy());
     uplotInstances = [];
     $chartGrid.innerHTML = "";
     const cols = parseInt($colSlider.value, 10);
     $chartGrid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
     drawChartsFromData(data, metrics);
+    uplotInstances.forEach((u, i) => {
+      if (i < savedZooms.length) {
+        const z = savedZooms[i];
+        if (z.x.min != null && z.x.max != null) u.setScale("x", z.x);
+        if (z.y.min != null && z.y.max != null) u.setScale("y", z.y);
+      }
+    });
     if (scrollEl) scrollEl.scrollTop = savedScroll;
   } catch (err) {
     console.warn("Auto-refresh poll failed:", err);
