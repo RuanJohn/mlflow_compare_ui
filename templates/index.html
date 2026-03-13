@@ -328,6 +328,7 @@ const COLORS = [
 
 const defaultGroup = {{ default_group|tojson }};
 const defaultExperiment = {{ default_experiment|tojson }};
+const hasPreloadedState = {{ has_preloaded_state|tojson }};
 
 let allRuns = [];
 let allMetricNames = [];
@@ -1494,13 +1495,22 @@ async function restoreFromState(state) {
 
 // ── Startup ──────────────────────────────────────────────────────────────
 
-(function init() {
+(async function init() {
   const hash = location.hash;
   if (hash.startsWith("#view=")) {
     const state = decodeViewHash(hash.slice(6));
     if (state) {
       restoreFromState(state);
       return;
+    }
+  }
+  if (hasPreloadedState) {
+    try {
+      const state = await api("/api/preloaded-state");
+      restoreFromState(state);
+      return;
+    } catch (err) {
+      showInfo("Failed to load preloaded state: " + err.message, "error");
     }
   }
   $exp.value = `${defaultGroup}/${defaultExperiment}`;

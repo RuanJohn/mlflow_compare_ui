@@ -2,6 +2,7 @@
 
 Usage:
     MLFLOW_TRACKING_URI=<uri> python app.py [--group-name G] [--experiment-name E]
+    MLFLOW_TRACKING_URI=<uri> python app.py --import-json saved-view.json
     # Then open http://localhost:5050
 """
 
@@ -33,6 +34,7 @@ log = logging.getLogger(__name__)
 app = Flask(__name__)
 
 _cli_defaults: dict[str, str] = {}
+_preloaded_state: dict[str, Any] | None = None
 
 
 def json_response(data: Any, status: int = 200) -> Response:
@@ -76,7 +78,15 @@ def index():
         "index.html",
         default_group=_cli_defaults.get("group_name", "your-group"),
         default_experiment=_cli_defaults.get("experiment_name", "some-exp"),
+        has_preloaded_state=_preloaded_state is not None,
     )
+
+
+@app.route("/api/preloaded-state")
+def api_preloaded_state():
+    if _preloaded_state is None:
+        return json_response({"error": "No preloaded state"}, 404)
+    return json_response(_preloaded_state)
 
 
 @app.route("/api/experiment")
@@ -197,10 +207,26 @@ def main() -> None:
     )
     parser.add_argument("--port", type=int, default=5050, help="Port to listen on")
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind to")
+    parser.add_argument(
+        "--import-json",
+        metavar="FILE",
+        help="Path to an exported .json view file to auto-load on startup",
+    )
     args = parser.parse_args()
 
     _cli_defaults["group_name"] = args.group_name
     _cli_defaults["experiment_name"] = args.experiment_name
+
+    global _preloaded_state
+    if args.import_json:
+        import json as _json
+        path = os.path.expanduser(args.import_json)
+        if not os.path.isfile(path):
+            print(f"ERROR: --import-json file not found: {path}", file=sys.stderr)
+            sys.exit(1)
+        with open(path) as f:
+            _preloaded_state = _json.load(f)
+        print(f"Preloaded view state from: {path}")
 
     if not os.environ.get("MLFLOW_TRACKING_URI"):
         print(
