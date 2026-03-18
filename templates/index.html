@@ -494,6 +494,7 @@ async function loadExperiment() {
   $tableSection.style.display = "none";
   $metricSection.style.display = "none";
   $chartGrid.innerHTML = "";
+  Object.keys(runParamsCache).forEach(k => delete runParamsCache[k]);
 
   try {
     const expData = await api(`/api/experiment?name=${encodeURIComponent(name)}`);
@@ -697,29 +698,25 @@ document.getElementById("unselectAllBtn").addEventListener("click", () => {
 
 // ── Parameters comparison ────────────────────────────────────────────────
 
+const runParamsCache = {};
+
 function getAllParamKeys() {
   const ids = [...selectedRunIds];
   const keys = new Set();
   ids.forEach(id => {
-    const run = allRuns.find(r => r.run_id === id);
-    if (run && run.params) Object.keys(run.params).forEach(k => keys.add(k));
+    const p = runParamsCache[id];
+    if (p) Object.keys(p).forEach(k => keys.add(k));
   });
   return [...keys].sort();
 }
 
-function renderParamsSection() {
+function renderParamsTable() {
   const ids = [...selectedRunIds];
-  if (!ids.length) {
-    $paramsSection.style.display = "none";
-    return;
-  }
-  $paramsSection.style.display = "";
-
   const runs = ids.map((id, i) => {
     const run = allRuns.find(r => r.run_id === id);
     const name = customLegends.has(id) ? customLegends.get(id) : (run ? run.run_name : id.slice(0, 8));
     const color = COLORS[i % COLORS.length];
-    return { id, run, name, color, params: (run && run.params) ? run.params : {} };
+    return { id, run, name, color, params: runParamsCache[id] || {} };
   });
 
   let paramKeys = getAllParamKeys();
@@ -759,6 +756,31 @@ function renderParamsSection() {
   }).join("");
 
   $paramsTable.innerHTML = `<thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}</tbody>`;
+}
+
+async function renderParamsSection() {
+  const ids = [...selectedRunIds];
+  if (!ids.length) {
+    $paramsSection.style.display = "none";
+    return;
+  }
+  $paramsSection.style.display = "";
+
+  const missing = ids.filter(id => !(id in runParamsCache));
+  if (missing.length) {
+    $paramsTable.innerHTML = `<tr><td class="params-empty"><span class="spinner"></span> Loading parameters…</td></tr>`;
+    try {
+      const data = await api(`/api/params?run_ids=${encodeURIComponent(missing.join(","))}`);
+      for (const [rid, p] of Object.entries(data.params)) {
+        runParamsCache[rid] = p;
+      }
+    } catch (err) {
+      $paramsTable.innerHTML = `<tr><td class="params-empty">Failed to load params: ${esc(err.message)}</td></tr>`;
+      return;
+    }
+  }
+
+  renderParamsTable();
 }
 
 function renderParamPills() {
@@ -1245,6 +1267,7 @@ $exp.addEventListener("keydown", e => { if (e.key === "Enter") loadExperiment();
 
 $refreshBtn.addEventListener("click", async () => {
   showStatus('<span class="spinner"></span> Clearing cache…');
+  Object.keys(runParamsCache).forEach(k => delete runParamsCache[k]);
   try { await api("/api/clear-cache", {method:"POST"}); } catch(e) {}
   loadExperiment();
 });
@@ -1452,6 +1475,7 @@ async function restoreFromState(state) {
   $tableSection.style.display = "none";
   $metricSection.style.display = "none";
   $chartGrid.innerHTML = "";
+  Object.keys(runParamsCache).forEach(k => delete runParamsCache[k]);
 
   try {
     const expData = await api(`/api/experiment?name=${encodeURIComponent($exp.value.trim())}`);

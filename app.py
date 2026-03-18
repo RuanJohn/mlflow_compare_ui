@@ -21,10 +21,12 @@ import orjson
 from flask import Flask, Response, render_template, request
 from mlflow.exceptions import MlflowException
 
+import cache_db
 from mlflow_utils import (
     batch_metric_history,
     clear_caches,
     get_experiment_by_name,
+    get_params_for_runs,
     list_metric_names,
     list_runs,
 )
@@ -107,6 +109,18 @@ def api_runs():
         return json_response({"error": "Missing 'experiment_id' parameter"}, 400)
     runs = list_runs(experiment_id)
     return json_response({"runs": runs})
+
+
+@app.route("/api/params")
+def api_params():
+    raw = request.args.get("run_ids", "").strip()
+    if not raw:
+        return json_response({"error": "Missing 'run_ids' parameter"}, 400)
+    run_ids = [rid.strip() for rid in raw.split(",") if rid.strip()]
+    if not run_ids:
+        return json_response({"error": "No valid run_ids provided"}, 400)
+    params_map = get_params_for_runs(run_ids)
+    return json_response({"params": params_map})
 
 
 @app.route("/api/metric-names")
@@ -212,10 +226,17 @@ def main() -> None:
         metavar="FILE",
         help="Path to an exported .json view file to auto-load on startup",
     )
+    parser.add_argument(
+        "--cache-dir",
+        default=cache_db.DEFAULT_CACHE_DIR,
+        help="Directory for the SQLite persistent cache (default: ~/.mlflow_compare_ui)",
+    )
     args = parser.parse_args()
 
     _cli_defaults["group_name"] = args.group_name
     _cli_defaults["experiment_name"] = args.experiment_name
+
+    cache_db.init_db(args.cache_dir)
 
     global _preloaded_state
     if args.import_json:

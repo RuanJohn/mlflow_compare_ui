@@ -40,14 +40,18 @@ Optional variables:
 uv run python app.py --group-name "my-group" --experiment-name "my-experiment"
 ```
 
-The `--group-name` and `--experiment-name` flags set the default experiment shown in the top bar (formatted as `group/experiment`). Both are optional and fall back to placeholder values if omitted.
+The app opens in your browser at `http://localhost:5050`. On first launch, all runs are fetched from MLflow and stored in a local SQLite cache. Subsequent launches serve cached data instantly and only fetch new runs incrementally.
 
-Additional flags:
+## CLI Flags
 
-- `--port` — port to listen on (default: 5050)
-- `--host` — host to bind to (default: 127.0.0.1)
-
-The app opens in your browser at `http://localhost:5050`. The default experiment's run data is prefetched in the background on startup, so the first page load is typically fast.
+| Flag | Default | Description |
+|---|---|---|
+| `--group-name` | `your-group` | Default experiment group name, pre-filled in the UI as `group/experiment` |
+| `--experiment-name` | `some-exp` | Default experiment name, pre-filled in the UI as `group/experiment` |
+| `--port` | `5050` | Port to listen on |
+| `--host` | `127.0.0.1` | Host to bind to |
+| `--import-json FILE` | — | Path to an exported `.json` view file to auto-restore on startup (experiment, selected runs, metrics, chart settings) |
+| `--cache-dir` | `~/.mlflow_compare_ui` | Directory for the persistent SQLite cache database |
 
 ## Usage
 
@@ -80,7 +84,9 @@ Custom legend names are used in chart legends and persist across re-renders.
 
 ### Parameters comparison
 
-Below the selected runs panel, a parameters comparison table appears automatically when runs are selected. It displays all run parameters in a scrollable table with:
+Parameters are loaded on demand — they are only fetched from MLflow when you first select a run (a spinner is shown while loading). Once fetched, params are cached in SQLite so they load instantly on subsequent visits.
+
+The parameters table displays all run parameters in a scrollable table with:
 
 - **Rows** = parameter names, **Columns** = selected runs (with colored dots matching chart colors)
 - **Search and filter** — type in the search box and click **Add** to filter to specific parameters, shown as removable pills
@@ -135,7 +141,7 @@ All chart settings are in the sidebar and take effect instantly (no re-fetch nee
 
 ### Refreshing data
 
-Click the **↻ Refresh** button in the top bar to clear the server-side cache and re-fetch everything. Run metadata is cached for 2 minutes by default; auto-refresh bypasses the cache for metric data only.
+Click the **↻ Refresh** button in the top bar to clear all caches (in-memory and SQLite) and re-fetch everything from MLflow.
 
 ## Project Structure
 
@@ -143,6 +149,7 @@ Click the **↻ Refresh** button in the top bar to clear the server-side cache a
 mlflow_compare_ui/
 ├── app.py              # Flask backend with API endpoints
 ├── mlflow_utils.py     # MLflow client helpers, caching, parallel fetcher
+├── cache_db.py         # SQLite persistent cache (runs, params, metric histories)
 ├── templates/
 │   └── index.html      # Single-page frontend (vanilla JS + uPlot)
 ├── pyproject.toml      # Project metadata and dependencies
@@ -152,13 +159,61 @@ mlflow_compare_ui/
 
 ## Architecture
 
-The app is a Flask backend serving a single-page vanilla JS frontend:
+The app is a Flask backend serving a single-page vanilla JS frontend, with a two-tier caching system for fast startup and low latency.
 
-- **Backend** (`app.py` + `mlflow_utils.py`): API endpoints for experiment resolution, run listing (including parameters), and batch metric history. Uses a singleton `MlflowClient`, `TTLCache` for 120s caching, `ThreadPoolExecutor` with 16 workers for parallel metric fetches, and `orjson` for fast JSON serialization. The default experiment is prefetched in a background thread at startup to warm the cache.
-- **Frontend** (`templates/index.html`): All UI state and filtering lives in the browser. Charts render with uPlot (~35KB, canvas-based). No build step required. Metric data for active charts is auto-refreshed every 30 seconds.
+### Caching
+
+Data is cached at two levels:
+
+| Layer | Storage | Lifetime | Purpose |
+|---|---|---|---|
+| **L1** | In-memory `TTLCache` | 120 seconds | Avoids repeated SQLite reads within a session |
+| **L2** | SQLite (`~/.mlflow_compare_ui/cache.db`) | Persistent until cleared | Survives app restarts; enables incremental sync |
+
+The SQLite database stores four tables:
+
+- **`runs`** — run metadata (id, name, start time, status, tags, metric key names)
+- **`params`** — run parameters as key-value rows (lazy-loaded per run)
+- **`metric_history`** — metric timeseries data as step/value/timestamp rows (lazy-loaded per run+metric)
+- **`fetch_status`** — tracks which params and metrics have been fully fetched
+
+### Incremental run sync
+
+On startup (or when loading an experiment), `list_runs()` follows this flow:
+
+1. Check the in-memory TTLCache — if a fresh result exists, return it immediately
+2. Read all cached runs for the experiment from SQLite
+3. Find the most recent `start_time_ms` in the cache
+4. Query MLflow for only runs newer than that timestamp
+5. Merge new runs into SQLite and return the combined result
+
+On first launch (empty cache), all runs are fetched from MLflow. On subsequent launches, only new runs since the last fetch are pulled. Cached runs (including RUNNING ones) are served as-is for fast table rendering — fresh metric data is always fetched when you click Compare or via auto-refresh.
+
+### Lazy loading
+
+To keep the initial load fast, params and metric histories are not fetched until needed:
+
+- **Params**: fetched from MLflow when a run is first selected in the UI, then cached in SQLite. Subsequent selections serve from cache.
+- **Metric histories**: fetched from MLflow when **Compare** is clicked, then cached in SQLite. Subsequent chart loads for the same run+metric serve from cache. Auto-refresh bypasses the cache to pick up new data points.
+
+Both use a `ThreadPoolExecutor` with 16 workers for parallel fetches.
+
+### Staleness
+
+- **Run metadata** — cached forever once fetched. New runs are picked up incrementally; status changes on existing runs are not re-checked (use Refresh to force a full re-fetch if needed).
+- **Metric histories** — cached in SQLite on first fetch. Auto-refresh (every 30s) bypasses the cache and writes fresh data back, so the DB always has the latest values for actively viewed metrics.
+- **Clear cache** — the Refresh button wipes both L1 and L2 caches and re-fetches everything from MLflow.
+
+### Backend
+
+`app.py` + `mlflow_utils.py` + `cache_db.py`: API endpoints for experiment resolution, run listing, param fetching, and batch metric history. Uses a singleton `MlflowClient`, `orjson` for fast JSON serialization, and SQLite in WAL mode for concurrent reads/writes. The default experiment is prefetched in a background thread at startup.
+
+### Frontend
+
+`templates/index.html`: All UI state and filtering lives in the browser. Charts render with uPlot (~35KB, canvas-based). No build step required.
 
 ## Configuration
 
-The default experiment is set at launch via CLI flags (see [Launch the app](#3-launch-the-app) above).
+The default experiment is set at launch via CLI flags (see [CLI Flags](#cli-flags) above).
 
 Default metric presets for each run type are defined in the `DEFAULT_METRICS_TRAINING` and `DEFAULT_METRICS_EVALUATION` arrays in `templates/index.html`.
