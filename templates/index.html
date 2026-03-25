@@ -1209,6 +1209,7 @@ function drawChartsFromData(data, metrics) {
     const width = Math.max(rect.width || card.clientWidth - 20, 280);
 
     const isLog = yScaleMode === "log";
+    const multiMetric = group.metrics.length > 1;
 
     const yAxisLabel = multiMetric ? group.name : group.metrics[0].split("/").pop();
 
