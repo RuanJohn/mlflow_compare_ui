@@ -74,3 +74,4 @@ outputs/
 .venv/
 *.db
 cached_views/
+.worktrees/
