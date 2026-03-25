@@ -428,7 +428,7 @@ function updateExpAutocomplete() {
   }
 
   expDropdownIdx = -1;
-  $expDropdown.style.display = "";
+  $expDropdown.style.display = "block";
   $expDropdown.innerHTML = matches.map((n, i) =>
     `<div class="exp-dropdown-item" data-name="${esc(n)}">${esc(n)}</div>`
   ).join("");
@@ -438,15 +438,15 @@ function updateExpAutocomplete() {
 }
 
 function setExpGhost(match) {
-  if (!match) { $expGhost.textContent = ""; return; }
+  if (!match) { $expGhost.innerHTML = ""; return; }
   const raw = $exp.value;
   const idx = match.toLowerCase().indexOf(raw.toLowerCase());
   if (idx === 0) {
-    // Match starts at beginning — show full match as ghost with user's part invisible
-    $expGhost.textContent = raw + match.slice(raw.length);
+    // Prefix match — hide the typed portion, show only the completion suffix
+    $expGhost.innerHTML = `<span style="visibility:hidden">${esc(raw)}</span>${esc(match.slice(raw.length))}`;
   } else {
-    // Match is in the middle — just show the match name as ghost
-    $expGhost.textContent = match;
+    // Non-prefix match — no ghost text (would misalign)
+    $expGhost.innerHTML = "";
   }
 }
 
