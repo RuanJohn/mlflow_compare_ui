@@ -404,6 +404,54 @@ async function fetchExperimentNames() {
     console.warn("Failed to fetch experiment names:", e);
   }
 }
+
+let expDropdownIdx = -1;
+
+function updateExpAutocomplete() {
+  const q = $exp.value.toLowerCase().trim();
+  if (!q) {
+    $expDropdown.style.display = "none";
+    $expDropdown.innerHTML = "";
+    $expGhost.textContent = "";
+    expDropdownIdx = -1;
+    return;
+  }
+  const loaded = new Set(loadedExperiments.keys());
+  const matches = allExperimentNames
+    .filter(n => n.toLowerCase().includes(q) && !loaded.has(n))
+    .slice(0, 10);
+
+  if (!matches.length) {
+    $expDropdown.style.display = "none";
+    $expDropdown.innerHTML = "";
+    $expGhost.textContent = "";
+    expDropdownIdx = -1;
+    return;
+  }
+
+  expDropdownIdx = -1;
+  $expDropdown.style.display = "";
+  $expDropdown.innerHTML = matches.map((n, i) =>
+    `<div class="exp-dropdown-item" data-name="${esc(n)}">${esc(n)}</div>`
+  ).join("");
+
+  // Ghost text: show the first match, aligning the suffix after what the user typed
+  setExpGhost(matches[0]);
+}
+
+function setExpGhost(match) {
+  if (!match) { $expGhost.textContent = ""; return; }
+  const raw = $exp.value;
+  const idx = match.toLowerCase().indexOf(raw.toLowerCase());
+  if (idx === 0) {
+    // Match starts at beginning — show full match as ghost with user's part invisible
+    $expGhost.textContent = raw + match.slice(raw.length);
+  } else {
+    // Match is in the middle — just show the match name as ghost
+    $expGhost.textContent = match;
+  }
+}
+
 const $selectedRunsList = document.getElementById("selectedRunsList");
 const $paramsSection = document.getElementById("paramsSection");
 const $paramSearch = document.getElementById("paramSearch");
@@ -1392,6 +1440,7 @@ $loadBtn.addEventListener("click", () => {
   const name = $exp.value.trim();
   if (name) { addExperiment(name); }
 });
+$exp.addEventListener("input", updateExpAutocomplete);
 $exp.addEventListener("keydown", e => {
   if (e.key === "Enter") {
     const name = $exp.value.trim();
