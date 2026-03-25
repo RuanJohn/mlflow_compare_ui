@@ -163,7 +163,11 @@ td.mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:11px;color:var(
 <div class="topbar">
   <h1>MLflow Compare</h1>
   <div class="exp-input-area">
-    <input type="text" id="expInput" placeholder="Experiment name, e.g. group/experiment">
+    <div class="exp-input-wrap">
+      <span id="expGhost" class="exp-ghost"></span>
+      <input type="text" id="expInput" placeholder="Experiment name, e.g. group/experiment" autocomplete="off">
+      <div id="expDropdown" class="exp-dropdown"></div>
+    </div>
     <button class="btn btn-primary" id="loadBtn">Add</button>
   </div>
   <div id="expChips" class="exp-chips"></div>
