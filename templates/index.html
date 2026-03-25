@@ -1362,14 +1362,33 @@ window.addEventListener("resize", () => {
 
 // ── Event wiring ─────────────────────────────────────────────────────────
 
-$loadBtn.addEventListener("click", loadExperiment);
-$exp.addEventListener("keydown", e => { if (e.key === "Enter") loadExperiment(); });
+$loadBtn.addEventListener("click", () => {
+  const name = $exp.value.trim();
+  if (name) { addExperiment(name); $exp.value = ""; }
+});
+$exp.addEventListener("keydown", e => {
+  if (e.key === "Enter") {
+    const name = $exp.value.trim();
+    if (name) { addExperiment(name); $exp.value = ""; }
+  }
+});
+
+$expChips.addEventListener("click", e => {
+  const x = e.target.closest(".exp-chip-x");
+  if (!x) return;
+  removeExperiment(x.dataset.exp);
+});
 
 $refreshBtn.addEventListener("click", async () => {
   showStatus('<span class="spinner"></span> Clearing cache…');
   Object.keys(runParamsCache).forEach(k => delete runParamsCache[k]);
   try { await api("/api/clear-cache", {method:"POST"}); } catch(e) {}
-  loadExperiment();
+  const names = [...loadedExperiments.keys()];
+  loadedExperiments.clear();
+  for (const name of names) {
+    await addExperiment(name);
+  }
+  if (!names.length) clearStatus();
 });
 
 let filterDebounce;
