@@ -343,7 +343,7 @@ let allRuns = [];
 let allMetricNames = [];
 let selectedRunIds = new Set();
 let selectedMetrics = new Set();
-let experimentId = null;
+const loadedExperiments = new Map();  // name -> {id, runs[]}
 let uplotInstances = [];
 const customLegends = new Map();
 let selectedParams = new Set();
@@ -354,6 +354,7 @@ let pollTimer = null;
 const $exp = document.getElementById("expInput");
 const $loadBtn = document.getElementById("loadBtn");
 const $refreshBtn = document.getElementById("refreshBtn");
+const $expChips = document.getElementById("expChips");
 const $topStatus = document.getElementById("topStatus");
 const $nameFilter = document.getElementById("nameFilter");
 const $tagFilter = document.getElementById("tagFilter");
@@ -401,6 +402,30 @@ async function api(url, opts) {
   const data = await resp.json();
   if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
   return data;
+}
+
+function rebuildAllRuns() {
+  allRuns = [];
+  for (const [name, exp] of loadedExperiments) {
+    allRuns.push(...exp.runs);
+  }
+  allRuns.sort((a, b) => new Date(b.start_time) - new Date(a.start_time));
+
+  const metricSet = new Set();
+  allRuns.forEach(r => (r.metric_keys || []).forEach(k => metricSet.add(k)));
+  allMetricNames = [...metricSet].sort();
+
+  selectedRunIds = new Set([...selectedRunIds].filter(id => allRuns.some(r => r.run_id === id)));
+}
+
+function getExpShortName(fullName) {
+  return fullName.split("/").pop();
+}
+
+function renderExpChips() {
+  $expChips.innerHTML = [...loadedExperiments.keys()].map(name =>
+    `<span class="exp-chip">${esc(name)}<span class="exp-chip-x" data-exp="${esc(name)}">&times;</span></span>`
+  ).join("");
 }
 
 function formatTime(iso) {
@@ -493,46 +518,76 @@ function groupMetrics(metrics) {
 
 // ── Load experiment & runs ───────────────────────────────────────────────
 
-async function loadExperiment() {
-  stopPolling();
-  const name = $exp.value.trim();
-  if (!name) return showInfo("Enter an experiment name.", "error");
+async function addExperiment(name) {
+  if (loadedExperiments.has(name)) {
+    showInfo(`Experiment "${name}" is already loaded.`, "");
+    setTimeout(clearInfo, 2000);
+    return;
+  }
 
+  stopPolling();
   clearInfo();
   showStatus('<span class="spinner"></span> Loading…');
-  $tableSection.style.display = "none";
-  $metricSection.style.display = "none";
-  $chartGrid.innerHTML = "";
-  Object.keys(runParamsCache).forEach(k => delete runParamsCache[k]);
 
   try {
     const expData = await api(`/api/experiment?name=${encodeURIComponent(name)}`);
-    experimentId = expData.experiment_id;
-    $expInfo.textContent = `Experiment ID: ${experimentId}`;
+    const runsData = await api(`/api/runs?experiment_id=${encodeURIComponent(expData.experiment_id)}`);
 
-    const runsData = await api(`/api/runs?experiment_id=${encodeURIComponent(experimentId)}`);
-    allRuns = runsData.runs;
+    const shortName = getExpShortName(name);
+    runsData.runs.forEach(r => {
+      r._experimentName = shortName;
+      r._fullExperimentName = name;
+    });
 
-    if (!allRuns.length) {
-      clearStatus();
-      return showInfo("No runs found for this experiment.", "");
-    }
+    loadedExperiments.set(name, { id: expData.experiment_id, runs: runsData.runs });
+    rebuildAllRuns();
+    renderExpChips();
 
-    const metricSet = new Set();
-    allRuns.forEach(r => (r.metric_keys||[]).forEach(k => metricSet.add(k)));
-    allMetricNames = [...metricSet].sort();
-
-    selectedRunIds = new Set([...selectedRunIds].filter(id => allRuns.some(r => r.run_id === id)));
+    $expInfo.textContent = [...loadedExperiments.entries()]
+      .map(([n, e]) => `${n} (${e.id})`).join(", ");
 
     renderTable();
     renderSelectedRuns();
     renderMetricSelector();
-    $tableSection.style.display = "";
-    $metricSection.style.display = "";
+    $tableSection.style.display = allRuns.length ? "" : "none";
+    $metricSection.style.display = allRuns.length ? "" : "none";
     clearStatus();
   } catch (err) {
     clearStatus();
     showInfo(err.message, "error");
+  }
+}
+
+function removeExperiment(name) {
+  if (!loadedExperiments.has(name)) return;
+  stopPolling();
+
+  const exp = loadedExperiments.get(name);
+  exp.runs.forEach(r => {
+    selectedRunIds.delete(r.run_id);
+    customLegends.delete(r.run_id);
+  });
+  loadedExperiments.delete(name);
+  Object.keys(runParamsCache).forEach(k => {
+    if (exp.runs.some(r => r.run_id === k)) delete runParamsCache[k];
+  });
+
+  rebuildAllRuns();
+  renderExpChips();
+
+  $expInfo.textContent = [...loadedExperiments.entries()]
+    .map(([n, e]) => `${n} (${e.id})`).join(", ");
+
+  renderTable();
+  renderSelectedRuns();
+  renderMetricSelector();
+
+  if (!allRuns.length) {
+    $tableSection.style.display = "none";
+    $metricSection.style.display = "none";
+    $chartGrid.innerHTML = "";
+    uplotInstances.forEach(u => u.destroy());
+    uplotInstances = [];
   }
 }
 
