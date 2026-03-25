@@ -43,8 +43,13 @@ a{color:var(--accent2)}
 .btn-group{display:flex;gap:6px;flex-wrap:wrap}
 
 .exp-input-area{display:flex;gap:8px;align-items:center;flex:1;max-width:480px}
-.exp-input-area input[type=text]{flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg);color:var(--fg);font-size:13px}
-.exp-input-area input[type=text]:focus{outline:none;border-color:var(--accent)}
+.exp-input-wrap{position:relative;flex:1}
+.exp-input-wrap input[type=text]{width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg);color:var(--fg);font-size:13px}
+.exp-input-wrap input[type=text]:focus{outline:none;border-color:var(--accent)}
+.exp-ghost{position:absolute;left:0;top:0;right:0;bottom:0;padding:6px 10px;font-size:13px;font-family:inherit;color:var(--fg2);opacity:0.4;pointer-events:none;white-space:nowrap;overflow:hidden}
+.exp-dropdown{position:absolute;top:100%;left:0;right:0;max-height:240px;overflow-y:auto;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);margin-top:2px;z-index:200;display:none}
+.exp-dropdown-item{padding:6px 10px;font-size:12px;cursor:pointer;color:var(--fg)}
+.exp-dropdown-item:hover,.exp-dropdown-item.active{background:var(--accent);color:#fff}
 .exp-chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .exp-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;background:var(--accent);color:#fff;border-radius:var(--radius);font-size:12px;white-space:nowrap}
 .exp-chip-x{cursor:pointer;opacity:0.7;font-size:14px;line-height:1}
@@ -156,7 +161,11 @@ td.mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:11px;color:var(
 <div class="topbar">
   <h1>MLflow Compare</h1>
   <div class="exp-input-area">
-    <input type="text" id="expInput" placeholder="Experiment name, e.g. group/experiment">
+    <div class="exp-input-wrap">
+      <span id="expGhost" class="exp-ghost"></span>
+      <input type="text" id="expInput" placeholder="Experiment name, e.g. group/experiment" autocomplete="off">
+      <div id="expDropdown" class="exp-dropdown"></div>
+    </div>
     <button class="btn btn-primary" id="loadBtn">Add</button>
   </div>
   <div id="expChips" class="exp-chips"></div>
@@ -379,6 +388,68 @@ const $smoothSlider = document.getElementById("smoothSlider");
 const $smoothVal = document.getElementById("smoothVal");
 const $groupMode = document.getElementById("groupMode");
 const $selectedRunsSection = document.getElementById("selectedRunsSection");
+
+// Experiment autocomplete state
+let allExperimentNames = [];
+const $expGhost = document.getElementById("expGhost");
+const $expDropdown = document.getElementById("expDropdown");
+
+async function fetchExperimentNames() {
+  try {
+    const data = await api("/api/experiments");
+    allExperimentNames = data.experiments || [];
+  } catch (e) {
+    console.warn("Failed to fetch experiment names:", e);
+  }
+}
+
+let expDropdownIdx = -1;
+
+function updateExpAutocomplete() {
+  const q = $exp.value.toLowerCase().trim();
+  if (!q) {
+    $expDropdown.style.display = "none";
+    $expDropdown.innerHTML = "";
+    $expGhost.textContent = "";
+    expDropdownIdx = -1;
+    return;
+  }
+  const loaded = new Set(loadedExperiments.keys());
+  const matches = allExperimentNames
+    .filter(n => n.toLowerCase().includes(q) && !loaded.has(n))
+    .slice(0, 10);
+
+  if (!matches.length) {
+    $expDropdown.style.display = "none";
+    $expDropdown.innerHTML = "";
+    $expGhost.textContent = "";
+    expDropdownIdx = -1;
+    return;
+  }
+
+  expDropdownIdx = -1;
+  $expDropdown.style.display = "block";
+  $expDropdown.innerHTML = matches.map((n, i) =>
+    `<div class="exp-dropdown-item" data-name="${esc(n)}">${esc(n)}</div>`
+  ).join("");
+
+  // Ghost text: show the first match, aligning the suffix after what the user typed
+  setExpGhost(matches[0]);
+}
+
+function setExpGhost(match) {
+  if (!match) { $expGhost.innerHTML = ""; return; }
+  const raw = $exp.value;
+  const idx = match.toLowerCase().indexOf(raw.toLowerCase());
+  if (idx === 0) {
+    // Prefix match — hide the typed portion, show only the completion suffix
+    $expGhost.innerHTML = `<span style="visibility:hidden">${esc(raw)}</span>${esc(match.slice(raw.length))}`;
+  } else {
+    // Non-prefix match — no ghost text (would misalign)
+    $expGhost.innerHTML = "";
+  }
+}
+
 const $selectedRunsList = document.getElementById("selectedRunsList");
 const $paramsSection = document.getElementById("paramsSection");
 const $paramSearch = document.getElementById("paramSearch");
@@ -1367,10 +1438,83 @@ $loadBtn.addEventListener("click", () => {
   const name = $exp.value.trim();
   if (name) { addExperiment(name); }
 });
+$exp.addEventListener("input", updateExpAutocomplete);
 $exp.addEventListener("keydown", e => {
+  const items = $expDropdown.querySelectorAll(".exp-dropdown-item");
+  const open = $expDropdown.style.display !== "none" && items.length > 0;
+
+  if (e.key === "ArrowDown" && open) {
+    e.preventDefault();
+    expDropdownIdx = Math.min(expDropdownIdx + 1, items.length - 1);
+    items.forEach((el, i) => el.classList.toggle("active", i === expDropdownIdx));
+    setExpGhost(items[expDropdownIdx].dataset.name);
+    return;
+  }
+  if (e.key === "ArrowUp" && open) {
+    e.preventDefault();
+    expDropdownIdx = Math.max(expDropdownIdx - 1, 0);
+    items.forEach((el, i) => el.classList.toggle("active", i === expDropdownIdx));
+    setExpGhost(items[expDropdownIdx].dataset.name);
+    return;
+  }
+  if (e.key === "Tab" && open) {
+    e.preventDefault();
+    const match = expDropdownIdx >= 0 ? items[expDropdownIdx].dataset.name : items[0].dataset.name;
+    $exp.value = match;
+    $expDropdown.style.display = "none";
+    $expDropdown.innerHTML = "";
+    $expGhost.textContent = "";
+    expDropdownIdx = -1;
+    return;
+  }
   if (e.key === "Enter") {
-    const name = $exp.value.trim();
-    if (name) { addExperiment(name); }
+    if (open && expDropdownIdx >= 0) {
+      e.preventDefault();
+      const name = items[expDropdownIdx].dataset.name;
+      $exp.value = name;
+      $expDropdown.style.display = "none";
+      $expDropdown.innerHTML = "";
+      $expGhost.textContent = "";
+      expDropdownIdx = -1;
+      addExperiment(name);
+    } else {
+      const name = $exp.value.trim();
+      if (name) {
+        $expDropdown.style.display = "none";
+        $expDropdown.innerHTML = "";
+        $expGhost.textContent = "";
+        expDropdownIdx = -1;
+        addExperiment(name);
+      }
+    }
+    return;
+  }
+  if (e.key === "Escape") {
+    $expDropdown.style.display = "none";
+    $expDropdown.innerHTML = "";
+    $expGhost.textContent = "";
+    expDropdownIdx = -1;
+    return;
+  }
+});
+
+$expDropdown.addEventListener("click", e => {
+  const item = e.target.closest(".exp-dropdown-item");
+  if (!item) return;
+  const name = item.dataset.name;
+  $exp.value = name;
+  $expDropdown.style.display = "none";
+  $expDropdown.innerHTML = "";
+  $expGhost.textContent = "";
+  expDropdownIdx = -1;
+  addExperiment(name);
+});
+
+document.addEventListener("click", e => {
+  if (!$exp.contains(e.target) && !$expDropdown.contains(e.target)) {
+    $expDropdown.style.display = "none";
+    $expGhost.textContent = "";
+    expDropdownIdx = -1;
   }
 });
 
@@ -1665,6 +1809,10 @@ async function restoreFromState(state) {
   const defaultName = `${defaultGroup}/${defaultExperiment}`;
   addExperiment(defaultName);
 })();
+
+// Experiment autocomplete: fetch names on load + refresh every 10 min
+fetchExperimentNames();
+setInterval(fetchExperimentNames, 10 * 60 * 1000);
 
 })();
 </script>

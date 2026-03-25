@@ -27,6 +27,7 @@ from mlflow_utils import (
     clear_caches,
     get_experiment_by_name,
     get_params_for_runs,
+    list_experiments,
     list_metric_names,
     list_runs,
 )
@@ -89,6 +90,12 @@ def api_preloaded_state():
     if _preloaded_state is None:
         return json_response({"error": "No preloaded state"}, 404)
     return json_response(_preloaded_state)
+
+
+@app.route("/api/experiments")
+def api_experiments():
+    names = list_experiments()
+    return json_response({"experiments": names})
 
 
 @app.route("/api/experiment")
