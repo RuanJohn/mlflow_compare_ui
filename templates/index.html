@@ -1464,8 +1464,10 @@ function serializeViewState() {
   const legends = {};
   customLegends.forEach((v, k) => { legends[k] = v; });
   return {
-    v: 1,
-    experiment: $exp.value.trim(),
+    v: 2,
+    experiments: [...loadedExperiments.keys()],
+    // Keep single experiment field for backward compat with v1
+    experiment: [...loadedExperiments.keys()][0] || "",
     runs: [...selectedRunIds],
     metrics: [...selectedMetrics],
     legends,
@@ -1481,10 +1483,7 @@ function serializeViewState() {
 }
 
 function applyViewState(state) {
-  if (!state || !state.experiment) return false;
-
-  // Set experiment
-  $exp.value = state.experiment;
+  if (!state || (!state.experiment && !(state.experiments && state.experiments.length))) return false;
 
   // Settings
   const s = state.settings || {};
@@ -1558,7 +1557,7 @@ document.getElementById("exportViewBtn").addEventListener("click", () => {
   const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  const expName = $exp.value.trim().replace(/\//g, "_") || "view";
+  const expName = [...loadedExperiments.keys()].map(n => n.replace(/\//g, "_")).join("+") || "view";
   a.download = `mlflow-view_${expName}.json`;
   a.click();
   URL.revokeObjectURL(a.href);
@@ -1595,23 +1594,30 @@ async function restoreFromState(state) {
   $metricSection.style.display = "none";
   $chartGrid.innerHTML = "";
   Object.keys(runParamsCache).forEach(k => delete runParamsCache[k]);
+  loadedExperiments.clear();
+
+  // Support v2 (experiments array) and v1 (single experiment)
+  const expNames = state.experiments || (state.experiment ? [state.experiment] : []);
 
   try {
-    const expData = await api(`/api/experiment?name=${encodeURIComponent($exp.value.trim())}`);
-    experimentId = expData.experiment_id;
-    $expInfo.textContent = `Experiment ID: ${experimentId}`;
+    for (const name of expNames) {
+      const expData = await api(`/api/experiment?name=${encodeURIComponent(name)}`);
+      const runsData = await api(`/api/runs?experiment_id=${encodeURIComponent(expData.experiment_id)}`);
 
-    const runsData = await api(`/api/runs?experiment_id=${encodeURIComponent(experimentId)}`);
-    allRuns = runsData.runs;
+      const shortName = getExpShortName(name);
+      runsData.runs.forEach(r => {
+        r._experimentName = shortName;
+        r._fullExperimentName = name;
+      });
 
-    if (!allRuns.length) {
-      clearStatus();
-      return showInfo("No runs found for this experiment.", "");
+      loadedExperiments.set(name, { id: expData.experiment_id, runs: runsData.runs });
     }
 
-    const metricSet = new Set();
-    allRuns.forEach(r => (r.metric_keys||[]).forEach(k => metricSet.add(k)));
-    allMetricNames = [...metricSet].sort();
+    rebuildAllRuns();
+    renderExpChips();
+
+    $expInfo.textContent = [...loadedExperiments.entries()]
+      .map(([n, e]) => `${n} (${e.id})`).join(", ");
 
     // Restore selections — only keep IDs that still exist
     const validIds = new Set(allRuns.map(r => r.run_id));
@@ -1622,11 +1628,10 @@ async function restoreFromState(state) {
     renderSelectedRuns();
     renderMetricList();
     renderMetricPills();
-    $tableSection.style.display = "";
-    $metricSection.style.display = "";
+    $tableSection.style.display = allRuns.length ? "" : "none";
+    $metricSection.style.display = allRuns.length ? "" : "none";
     clearStatus();
 
-    // Auto-compare if we have selections
     if (selectedRunIds.size && selectedMetrics.size) {
       loadCharts();
     }
@@ -1656,8 +1661,8 @@ async function restoreFromState(state) {
       showInfo("Failed to load preloaded state: " + err.message, "error");
     }
   }
-  $exp.value = `${defaultGroup}/${defaultExperiment}`;
-  loadExperiment();
+  const defaultName = `${defaultGroup}/${defaultExperiment}`;
+  addExperiment(defaultName);
 })();
 
 })();
