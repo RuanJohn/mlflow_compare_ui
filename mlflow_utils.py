@@ -64,6 +64,13 @@ def get_experiment_by_name(name: str) -> Optional[dict[str, Any]]:
     }
 
 
+def list_experiments() -> list[str]:
+    """Return sorted list of all experiment names."""
+    client = get_client()
+    experiments = client.search_experiments()
+    return sorted(exp.name for exp in experiments if exp.lifecycle_stage == "active")
+
+
 def _mlflow_run_to_record(r: Any) -> dict[str, Any]:
     """Convert a single MLflow Run object to the dict format used by the app."""
     tags = dict(r.data.tags) if r.data.tags else {}
