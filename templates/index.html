@@ -20,8 +20,6 @@ a{color:var(--accent2)}
 /* Layout */
 .topbar{display:flex;align-items:center;gap:12px;padding:10px 20px;background:var(--bg2);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100}
 .topbar h1{font-size:16px;font-weight:600;white-space:nowrap}
-.topbar input[type=text]{flex:1;max-width:420px;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg);color:var(--fg);font-size:13px}
-.topbar input[type=text]:focus{outline:none;border-color:var(--accent)}
 
 .main{display:flex;gap:0;height:calc(100vh - 45px)}
 .sidebar{width:240px;min-width:200px;background:var(--bg2);border-right:1px solid var(--border);padding:14px;overflow-y:auto;flex-shrink:0}
@@ -43,6 +41,14 @@ a{color:var(--accent2)}
 .btn-primary:hover{background:var(--accent2)}
 .btn-sm{padding:3px 8px;font-size:11px}
 .btn-group{display:flex;gap:6px;flex-wrap:wrap}
+
+.exp-input-area{display:flex;gap:8px;align-items:center;flex:1;max-width:480px}
+.exp-input-area input[type=text]{flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg);color:var(--fg);font-size:13px}
+.exp-input-area input[type=text]:focus{outline:none;border-color:var(--accent)}
+.exp-chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.exp-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;background:var(--accent);color:#fff;border-radius:var(--radius);font-size:12px;white-space:nowrap}
+.exp-chip-x{cursor:pointer;opacity:0.7;font-size:14px;line-height:1}
+.exp-chip-x:hover{opacity:1}
 
 /* Table */
 .run-table-wrap{overflow-x:auto;margin-bottom:16px;border:1px solid var(--border);border-radius:var(--radius)}
@@ -149,9 +155,12 @@ td.mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:11px;color:var(
 
 <div class="topbar">
   <h1>MLflow Compare</h1>
-  <input type="text" id="expInput" placeholder="Experiment name, e.g. group/experiment">
-  <button class="btn btn-primary" id="loadBtn">Load</button>
-  <button class="btn" id="refreshBtn" title="Clear cache &amp; reload">&#x21bb; Refresh</button>
+  <div class="exp-input-area">
+    <input type="text" id="expInput" placeholder="Experiment name, e.g. group/experiment">
+    <button class="btn btn-primary" id="loadBtn">Add</button>
+  </div>
+  <div id="expChips" class="exp-chips"></div>
+  <button class="btn" id="refreshBtn" title="Clear cache &amp; reload all">&#x21bb; Refresh</button>
   <span id="topStatus"></span>
 </div>
 
@@ -334,7 +343,7 @@ let allRuns = [];
 let allMetricNames = [];
 let selectedRunIds = new Set();
 let selectedMetrics = new Set();
-let experimentId = null;
+const loadedExperiments = new Map();  // name -> {id, runs[]}
 let uplotInstances = [];
 const customLegends = new Map();
 let selectedParams = new Set();
@@ -345,6 +354,7 @@ let pollTimer = null;
 const $exp = document.getElementById("expInput");
 const $loadBtn = document.getElementById("loadBtn");
 const $refreshBtn = document.getElementById("refreshBtn");
+const $expChips = document.getElementById("expChips");
 const $topStatus = document.getElementById("topStatus");
 const $nameFilter = document.getElementById("nameFilter");
 const $tagFilter = document.getElementById("tagFilter");
@@ -392,6 +402,30 @@ async function api(url, opts) {
   const data = await resp.json();
   if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
   return data;
+}
+
+function rebuildAllRuns() {
+  allRuns = [];
+  for (const [name, exp] of loadedExperiments) {
+    allRuns.push(...exp.runs);
+  }
+  allRuns.sort((a, b) => new Date(b.start_time) - new Date(a.start_time));
+
+  const metricSet = new Set();
+  allRuns.forEach(r => (r.metric_keys || []).forEach(k => metricSet.add(k)));
+  allMetricNames = [...metricSet].sort();
+
+  selectedRunIds = new Set([...selectedRunIds].filter(id => allRuns.some(r => r.run_id === id)));
+}
+
+function getExpShortName(fullName) {
+  return fullName.split("/").pop();
+}
+
+function renderExpChips() {
+  $expChips.innerHTML = [...loadedExperiments.keys()].map(name =>
+    `<span class="exp-chip">${esc(name)}<span class="exp-chip-x" data-exp="${esc(name)}">&times;</span></span>`
+  ).join("");
 }
 
 function formatTime(iso) {
@@ -454,7 +488,10 @@ function getFilteredRuns() {
   const nf = $nameFilter.value.toLowerCase();
   const tf = $tagFilter.value.toLowerCase();
   return allRuns.filter(r => {
-    if (nf && !r.run_name.toLowerCase().includes(nf)) return false;
+    if (nf) {
+      const displayName = r._experimentName ? r._experimentName + '/' + r.run_name : r.run_name;
+      if (!displayName.toLowerCase().includes(nf)) return false;
+    }
     if (tf && !r.tags_list.some(t => t.toLowerCase().includes(tf))) return false;
     return true;
   });
@@ -484,46 +521,76 @@ function groupMetrics(metrics) {
 
 // ── Load experiment & runs ───────────────────────────────────────────────
 
-async function loadExperiment() {
-  stopPolling();
-  const name = $exp.value.trim();
-  if (!name) return showInfo("Enter an experiment name.", "error");
+async function addExperiment(name) {
+  if (loadedExperiments.has(name)) {
+    showInfo(`Experiment "${name}" is already loaded.`, "");
+    setTimeout(clearInfo, 2000);
+    return;
+  }
 
+  stopPolling();
   clearInfo();
   showStatus('<span class="spinner"></span> Loading…');
-  $tableSection.style.display = "none";
-  $metricSection.style.display = "none";
-  $chartGrid.innerHTML = "";
-  Object.keys(runParamsCache).forEach(k => delete runParamsCache[k]);
 
   try {
     const expData = await api(`/api/experiment?name=${encodeURIComponent(name)}`);
-    experimentId = expData.experiment_id;
-    $expInfo.textContent = `Experiment ID: ${experimentId}`;
+    const runsData = await api(`/api/runs?experiment_id=${encodeURIComponent(expData.experiment_id)}`);
 
-    const runsData = await api(`/api/runs?experiment_id=${encodeURIComponent(experimentId)}`);
-    allRuns = runsData.runs;
+    const shortName = getExpShortName(name);
+    runsData.runs.forEach(r => {
+      r._experimentName = shortName;
+      r._fullExperimentName = name;
+    });
 
-    if (!allRuns.length) {
-      clearStatus();
-      return showInfo("No runs found for this experiment.", "");
-    }
+    loadedExperiments.set(name, { id: expData.experiment_id, runs: runsData.runs });
+    rebuildAllRuns();
+    renderExpChips();
 
-    const metricSet = new Set();
-    allRuns.forEach(r => (r.metric_keys||[]).forEach(k => metricSet.add(k)));
-    allMetricNames = [...metricSet].sort();
-
-    selectedRunIds = new Set([...selectedRunIds].filter(id => allRuns.some(r => r.run_id === id)));
+    $expInfo.textContent = [...loadedExperiments.entries()]
+      .map(([n, e]) => `${n} (${e.id})`).join(", ");
 
     renderTable();
     renderSelectedRuns();
     renderMetricSelector();
-    $tableSection.style.display = "";
-    $metricSection.style.display = "";
+    $tableSection.style.display = allRuns.length ? "" : "none";
+    $metricSection.style.display = allRuns.length ? "" : "none";
     clearStatus();
   } catch (err) {
     clearStatus();
     showInfo(err.message, "error");
+  }
+}
+
+function removeExperiment(name) {
+  if (!loadedExperiments.has(name)) return;
+  stopPolling();
+
+  const exp = loadedExperiments.get(name);
+  exp.runs.forEach(r => {
+    selectedRunIds.delete(r.run_id);
+    customLegends.delete(r.run_id);
+  });
+  loadedExperiments.delete(name);
+  Object.keys(runParamsCache).forEach(k => {
+    if (exp.runs.some(r => r.run_id === k)) delete runParamsCache[k];
+  });
+
+  rebuildAllRuns();
+  renderExpChips();
+
+  $expInfo.textContent = [...loadedExperiments.entries()]
+    .map(([n, e]) => `${n} (${e.id})`).join(", ");
+
+  renderTable();
+  renderSelectedRuns();
+  renderMetricSelector();
+
+  if (!allRuns.length) {
+    $tableSection.style.display = "none";
+    $metricSection.style.display = "none";
+    $chartGrid.innerHTML = "";
+    uplotInstances.forEach(u => u.destroy());
+    uplotInstances = [];
   }
 }
 
@@ -538,7 +605,7 @@ function renderTable() {
     const tags = (r.tags_list||[]).map(t => `<span class="tag-chip" title="${t}">${t}</span>`).join("");
     return `<tr>
       <td><input type="checkbox" class="run-cb" data-id="${r.run_id}" ${checked}></td>
-      <td>${esc(r.run_name)}</td>
+      <td>${r._experimentName ? esc(r._experimentName + '/' + r.run_name) : esc(r.run_name)}</td>
       <td style="white-space:nowrap">${formatTime(r.start_time)}</td>
       <td><span class="status-badge status-${r.status}">${r.status}</span></td>
       <td class="mono">${r.run_id}</td>
@@ -628,7 +695,9 @@ $metricSearch.addEventListener("input", renderMetricList);
 function getRunLabel(runId) {
   if (customLegends.has(runId)) return customLegends.get(runId);
   const run = allRuns.find(r => r.run_id === runId);
-  return run ? run.run_name : runId.slice(0, 8);
+  if (!run) return runId.slice(0, 8);
+  const prefix = run._experimentName ? run._experimentName + '/' : '';
+  return prefix + run.run_name;
 }
 
 function getRunColor(runId) {
@@ -651,10 +720,10 @@ function renderSelectedRuns() {
 
   $selectedRunsList.innerHTML = ids.map((id, i) => {
     const run = allRuns.find(r => r.run_id === id);
-    const name = run ? run.run_name : id.slice(0, 8);
+    const name = run ? (run._experimentName ? run._experimentName + '/' + run.run_name : run.run_name) : id.slice(0, 8);
     const legend = customLegends.has(id) ? customLegends.get(id) : name;
     const color = COLORS[i % COLORS.length];
-    const expName = experimentId || "";
+    const expName = run ? (run._fullExperimentName || "") : "";
     return `<div class="sr-card" data-id="${id}">
       <span class="sr-dot" style="background:${color}"></span>
       <div class="sr-info">
@@ -867,6 +936,7 @@ document.addEventListener("click", e => {
 
 let lastChartData = null;
 let lastChartMetrics = [];
+let lastChartGroups = [];  // [{name, metrics}] — preserved for in-place poll updates
 
 function renderCharts() {
   if (!lastChartData) return;
@@ -910,26 +980,49 @@ async function pollMetrics() {
       body: JSON.stringify({run_ids: runIds, metrics, skip_cache: true}),
     });
     lastChartData = data;
-    const scrollEl = document.querySelector(".content");
-    const savedScroll = scrollEl ? scrollEl.scrollTop : 0;
-    const savedZooms = uplotInstances.map(u => ({
-      x: { min: u.scales.x.min, max: u.scales.x.max },
-      y: { min: u.scales.y.min, max: u.scales.y.max },
-    }));
-    uplotInstances.forEach(u => u.destroy());
-    uplotInstances = [];
-    $chartGrid.innerHTML = "";
-    const cols = parseInt($colSlider.value, 10);
-    $chartGrid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
-    drawChartsFromData(data, metrics);
-    uplotInstances.forEach((u, i) => {
-      if (i < savedZooms.length) {
-        const z = savedZooms[i];
-        if (z.x.min != null && z.x.max != null) u.setScale("x", z.x);
-        if (z.y.min != null && z.y.max != null) u.setScale("y", z.y);
-      }
+
+    // Build lookup from new data
+    const byMetric = {};
+    data.results.forEach(r => {
+      if (!byMetric[r.metric]) byMetric[r.metric] = [];
+      byMetric[r.metric].push(r);
     });
-    if (scrollEl) scrollEl.scrollTop = savedScroll;
+
+    const runColorMap = {};
+    let colorIdx = 0;
+    [...selectedRunIds].forEach(id => {
+      runColorMap[id] = COLORS[colorIdx % COLORS.length];
+      colorIdx++;
+    });
+
+    const useWall = getXAxisMode() === "wall";
+    const smoothAlpha = getSmoothingFactor();
+
+    // If chart count matches, update in-place; otherwise full re-render
+    if (lastChartGroups.length === uplotInstances.length) {
+      lastChartGroups.forEach((group, i) => {
+        const allEntries = [];
+        group.metrics.forEach(metric => {
+          const entries = (byMetric[metric] || []).filter(e => e.steps && e.steps.length > 0);
+          entries.forEach(e => allEntries.push({ ...e, _metric: metric }));
+        });
+        if (allEntries.length) {
+          const { uData } = buildGroupUData(allEntries, runColorMap, useWall, smoothAlpha);
+          uplotInstances[i].setData(uData, false);  // false = preserve zoom/scales
+        }
+      });
+    } else {
+      // Fallback: full re-render (rare — metric set changed)
+      const scrollEl = document.querySelector(".content");
+      const savedScroll = scrollEl ? scrollEl.scrollTop : 0;
+      uplotInstances.forEach(u => u.destroy());
+      uplotInstances = [];
+      $chartGrid.innerHTML = "";
+      const cols = parseInt($colSlider.value, 10);
+      $chartGrid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+      drawChartsFromData(data, metrics);
+      if (scrollEl) requestAnimationFrame(() => { scrollEl.scrollTop = savedScroll; });
+    }
   } catch (err) {
     console.warn("Auto-refresh poll failed:", err);
   }
@@ -979,6 +1072,75 @@ async function loadCharts() {
   }
 }
 
+function buildGroupUData(allEntries, runColorMap, useWall, smoothAlpha) {
+  const multiMetric = new Set(allEntries.map(e => e._metric)).size > 1;
+  let xArr, series, uData, xLabel;
+
+  if (useWall && allEntries[0].timestamps && allEntries[0].timestamps.length) {
+    xLabel = "Hours";
+    const relData = allEntries.map(entry => {
+      const t0 = entry.timestamps[0] || 0;
+      return {
+        xs: entry.timestamps.map(ts => (ts - t0) / 3600000),
+        ys: entry.values,
+        entry,
+      };
+    });
+    const allX = new Set();
+    relData.forEach(d => d.xs.forEach(x => allX.add(x)));
+    xArr = [...allX].sort((a, b) => a - b);
+    const xIdx = {};
+    xArr.forEach((v, i) => { xIdx[v] = i; });
+
+    series = [{ label: xLabel }];
+    uData = [new Float64Array(xArr)];
+
+    relData.forEach((d, i) => {
+      const metricSuffix = multiMetric ? ` [${d.entry._metric.split("/").pop()}]` : "";
+      const label = getRunLabel(d.entry.run_id) + metricSuffix;
+      series.push({
+        label,
+        stroke: runColorMap[d.entry.run_id] || COLORS[i % COLORS.length],
+        width: 1.5,
+      });
+      let yArr = new Float64Array(xArr.length).fill(NaN);
+      for (let j = 0; j < d.xs.length; j++) {
+        yArr[xIdx[d.xs[j]]] = d.ys[j];
+      }
+      if (smoothAlpha > 0) yArr = emaSmooth(yArr, smoothAlpha);
+      uData.push(yArr);
+    });
+  } else {
+    xLabel = "Step";
+    const allSteps = new Set();
+    allEntries.forEach(e => e.steps.forEach(s => allSteps.add(s)));
+    xArr = [...allSteps].sort((a, b) => a - b);
+    const xIdx = {};
+    xArr.forEach((v, i) => { xIdx[v] = i; });
+
+    series = [{ label: xLabel }];
+    uData = [new Float64Array(xArr)];
+
+    allEntries.forEach((entry, i) => {
+      const metricSuffix = multiMetric ? ` [${entry._metric.split("/").pop()}]` : "";
+      const label = getRunLabel(entry.run_id) + metricSuffix;
+      series.push({
+        label,
+        stroke: runColorMap[entry.run_id] || COLORS[i % COLORS.length],
+        width: 1.5,
+      });
+      let yArr = new Float64Array(xArr.length).fill(NaN);
+      for (let j = 0; j < entry.steps.length; j++) {
+        yArr[xIdx[entry.steps[j]]] = entry.values[j];
+      }
+      if (smoothAlpha > 0) yArr = emaSmooth(yArr, smoothAlpha);
+      uData.push(yArr);
+    });
+  }
+
+  return { uData, series, xLabel, xArr };
+}
+
 function drawChartsFromData(data, metrics) {
   const byMetric = {};
   data.results.forEach(r => {
@@ -999,6 +1161,7 @@ function drawChartsFromData(data, metrics) {
   const yScaleMode = getYScale();
   const smoothAlpha = getSmoothingFactor();
   const groups = groupMetrics(metrics);
+  lastChartGroups = groups;
 
   groups.forEach(group => {
     const card = document.createElement("div");
@@ -1040,75 +1203,13 @@ function drawChartsFromData(data, metrics) {
     card.appendChild(wrap);
     $chartGrid.appendChild(card);
 
-    const multiMetric = group.metrics.length > 1;
-    let xArr, series, uData, xLabel;
-
-    if (useWall && allEntries[0].timestamps && allEntries[0].timestamps.length) {
-      xLabel = "Hours";
-      const relData = allEntries.map(entry => {
-        const t0 = entry.timestamps[0] || 0;
-        return {
-          xs: entry.timestamps.map(ts => (ts - t0) / 3600000),
-          ys: entry.values,
-          entry,
-        };
-      });
-      const allX = new Set();
-      relData.forEach(d => d.xs.forEach(x => allX.add(x)));
-      xArr = [...allX].sort((a, b) => a - b);
-      const xIdx = {};
-      xArr.forEach((v, i) => { xIdx[v] = i; });
-
-      series = [{ label: xLabel }];
-      uData = [new Float64Array(xArr)];
-
-      relData.forEach((d, i) => {
-        const metricSuffix = multiMetric ? ` [${d.entry._metric.split("/").pop()}]` : "";
-        const label = getRunLabel(d.entry.run_id) + metricSuffix;
-        series.push({
-          label,
-          stroke: runColorMap[d.entry.run_id] || COLORS[i % COLORS.length],
-          width: 1.5,
-        });
-        let yArr = new Float64Array(xArr.length).fill(NaN);
-        for (let j = 0; j < d.xs.length; j++) {
-          yArr[xIdx[d.xs[j]]] = d.ys[j];
-        }
-        if (smoothAlpha > 0) yArr = emaSmooth(yArr, smoothAlpha);
-        uData.push(yArr);
-      });
-    } else {
-      xLabel = "Step";
-      const allSteps = new Set();
-      allEntries.forEach(e => e.steps.forEach(s => allSteps.add(s)));
-      xArr = [...allSteps].sort((a, b) => a - b);
-      const xIdx = {};
-      xArr.forEach((v, i) => { xIdx[v] = i; });
-
-      series = [{ label: xLabel }];
-      uData = [new Float64Array(xArr)];
-
-      allEntries.forEach((entry, i) => {
-        const metricSuffix = multiMetric ? ` [${entry._metric.split("/").pop()}]` : "";
-        const label = getRunLabel(entry.run_id) + metricSuffix;
-        series.push({
-          label,
-          stroke: runColorMap[entry.run_id] || COLORS[i % COLORS.length],
-          width: 1.5,
-        });
-        let yArr = new Float64Array(xArr.length).fill(NaN);
-        for (let j = 0; j < entry.steps.length; j++) {
-          yArr[xIdx[entry.steps[j]]] = entry.values[j];
-        }
-        if (smoothAlpha > 0) yArr = emaSmooth(yArr, smoothAlpha);
-        uData.push(yArr);
-      });
-    }
+    const { uData, series, xLabel, xArr } = buildGroupUData(allEntries, runColorMap, useWall, smoothAlpha);
 
     const rect = wrap.getBoundingClientRect();
     const width = Math.max(rect.width || card.clientWidth - 20, 280);
 
     const isLog = yScaleMode === "log";
+    const multiMetric = group.metrics.length > 1;
 
     const yAxisLabel = multiMetric ? group.name : group.metrics[0].split("/").pop();
 
@@ -1262,14 +1363,33 @@ window.addEventListener("resize", () => {
 
 // ── Event wiring ─────────────────────────────────────────────────────────
 
-$loadBtn.addEventListener("click", loadExperiment);
-$exp.addEventListener("keydown", e => { if (e.key === "Enter") loadExperiment(); });
+$loadBtn.addEventListener("click", () => {
+  const name = $exp.value.trim();
+  if (name) { addExperiment(name); }
+});
+$exp.addEventListener("keydown", e => {
+  if (e.key === "Enter") {
+    const name = $exp.value.trim();
+    if (name) { addExperiment(name); }
+  }
+});
+
+$expChips.addEventListener("click", e => {
+  const x = e.target.closest(".exp-chip-x");
+  if (!x) return;
+  removeExperiment(x.dataset.exp);
+});
 
 $refreshBtn.addEventListener("click", async () => {
   showStatus('<span class="spinner"></span> Clearing cache…');
   Object.keys(runParamsCache).forEach(k => delete runParamsCache[k]);
   try { await api("/api/clear-cache", {method:"POST"}); } catch(e) {}
-  loadExperiment();
+  const names = [...loadedExperiments.keys()];
+  loadedExperiments.clear();
+  for (const name of names) {
+    await addExperiment(name);
+  }
+  if (!names.length) clearStatus();
 });
 
 let filterDebounce;
@@ -1345,8 +1465,10 @@ function serializeViewState() {
   const legends = {};
   customLegends.forEach((v, k) => { legends[k] = v; });
   return {
-    v: 1,
-    experiment: $exp.value.trim(),
+    v: 2,
+    experiments: [...loadedExperiments.keys()],
+    // Keep single experiment field for backward compat with v1
+    experiment: [...loadedExperiments.keys()][0] || "",
     runs: [...selectedRunIds],
     metrics: [...selectedMetrics],
     legends,
@@ -1362,10 +1484,7 @@ function serializeViewState() {
 }
 
 function applyViewState(state) {
-  if (!state || !state.experiment) return false;
-
-  // Set experiment
-  $exp.value = state.experiment;
+  if (!state || (!state.experiment && !(state.experiments && state.experiments.length))) return false;
 
   // Settings
   const s = state.settings || {};
@@ -1439,7 +1558,7 @@ document.getElementById("exportViewBtn").addEventListener("click", () => {
   const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  const expName = $exp.value.trim().replace(/\//g, "_") || "view";
+  const expName = [...loadedExperiments.keys()].map(n => n.replace(/\//g, "_")).join("+") || "view";
   a.download = `mlflow-view_${expName}.json`;
   a.click();
   URL.revokeObjectURL(a.href);
@@ -1476,23 +1595,30 @@ async function restoreFromState(state) {
   $metricSection.style.display = "none";
   $chartGrid.innerHTML = "";
   Object.keys(runParamsCache).forEach(k => delete runParamsCache[k]);
+  loadedExperiments.clear();
+
+  // Support v2 (experiments array) and v1 (single experiment)
+  const expNames = state.experiments || (state.experiment ? [state.experiment] : []);
 
   try {
-    const expData = await api(`/api/experiment?name=${encodeURIComponent($exp.value.trim())}`);
-    experimentId = expData.experiment_id;
-    $expInfo.textContent = `Experiment ID: ${experimentId}`;
+    for (const name of expNames) {
+      const expData = await api(`/api/experiment?name=${encodeURIComponent(name)}`);
+      const runsData = await api(`/api/runs?experiment_id=${encodeURIComponent(expData.experiment_id)}`);
 
-    const runsData = await api(`/api/runs?experiment_id=${encodeURIComponent(experimentId)}`);
-    allRuns = runsData.runs;
+      const shortName = getExpShortName(name);
+      runsData.runs.forEach(r => {
+        r._experimentName = shortName;
+        r._fullExperimentName = name;
+      });
 
-    if (!allRuns.length) {
-      clearStatus();
-      return showInfo("No runs found for this experiment.", "");
+      loadedExperiments.set(name, { id: expData.experiment_id, runs: runsData.runs });
     }
 
-    const metricSet = new Set();
-    allRuns.forEach(r => (r.metric_keys||[]).forEach(k => metricSet.add(k)));
-    allMetricNames = [...metricSet].sort();
+    rebuildAllRuns();
+    renderExpChips();
+
+    $expInfo.textContent = [...loadedExperiments.entries()]
+      .map(([n, e]) => `${n} (${e.id})`).join(", ");
 
     // Restore selections — only keep IDs that still exist
     const validIds = new Set(allRuns.map(r => r.run_id));
@@ -1503,11 +1629,10 @@ async function restoreFromState(state) {
     renderSelectedRuns();
     renderMetricList();
     renderMetricPills();
-    $tableSection.style.display = "";
-    $metricSection.style.display = "";
+    $tableSection.style.display = allRuns.length ? "" : "none";
+    $metricSection.style.display = allRuns.length ? "" : "none";
     clearStatus();
 
-    // Auto-compare if we have selections
     if (selectedRunIds.size && selectedMetrics.size) {
       loadCharts();
     }
@@ -1537,8 +1662,8 @@ async function restoreFromState(state) {
       showInfo("Failed to load preloaded state: " + err.message, "error");
     }
   }
-  $exp.value = `${defaultGroup}/${defaultExperiment}`;
-  loadExperiment();
+  const defaultName = `${defaultGroup}/${defaultExperiment}`;
+  addExperiment(defaultName);
 })();
 
 })();
