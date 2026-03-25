@@ -390,6 +390,20 @@ const $smoothSlider = document.getElementById("smoothSlider");
 const $smoothVal = document.getElementById("smoothVal");
 const $groupMode = document.getElementById("groupMode");
 const $selectedRunsSection = document.getElementById("selectedRunsSection");
+
+// Experiment autocomplete state
+let allExperimentNames = [];
+const $expGhost = document.getElementById("expGhost");
+const $expDropdown = document.getElementById("expDropdown");
+
+async function fetchExperimentNames() {
+  try {
+    const data = await api("/api/experiments");
+    allExperimentNames = data.experiments || [];
+  } catch (e) {
+    console.warn("Failed to fetch experiment names:", e);
+  }
+}
 const $selectedRunsList = document.getElementById("selectedRunsList");
 const $paramsSection = document.getElementById("paramsSection");
 const $paramSearch = document.getElementById("paramSearch");
@@ -1676,6 +1690,10 @@ async function restoreFromState(state) {
   const defaultName = `${defaultGroup}/${defaultExperiment}`;
   addExperiment(defaultName);
 })();
+
+// Experiment autocomplete: fetch names on load + refresh every 10 min
+fetchExperimentNames();
+setInterval(fetchExperimentNames, 10 * 60 * 1000);
 
 })();
 </script>
