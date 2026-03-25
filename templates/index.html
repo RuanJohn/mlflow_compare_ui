@@ -1442,9 +1442,81 @@ $loadBtn.addEventListener("click", () => {
 });
 $exp.addEventListener("input", updateExpAutocomplete);
 $exp.addEventListener("keydown", e => {
+  const items = $expDropdown.querySelectorAll(".exp-dropdown-item");
+  const open = $expDropdown.style.display !== "none" && items.length > 0;
+
+  if (e.key === "ArrowDown" && open) {
+    e.preventDefault();
+    expDropdownIdx = Math.min(expDropdownIdx + 1, items.length - 1);
+    items.forEach((el, i) => el.classList.toggle("active", i === expDropdownIdx));
+    setExpGhost(items[expDropdownIdx].dataset.name);
+    return;
+  }
+  if (e.key === "ArrowUp" && open) {
+    e.preventDefault();
+    expDropdownIdx = Math.max(expDropdownIdx - 1, 0);
+    items.forEach((el, i) => el.classList.toggle("active", i === expDropdownIdx));
+    setExpGhost(items[expDropdownIdx].dataset.name);
+    return;
+  }
+  if (e.key === "Tab" && open) {
+    e.preventDefault();
+    const match = expDropdownIdx >= 0 ? items[expDropdownIdx].dataset.name : items[0].dataset.name;
+    $exp.value = match;
+    $expDropdown.style.display = "none";
+    $expDropdown.innerHTML = "";
+    $expGhost.textContent = "";
+    expDropdownIdx = -1;
+    return;
+  }
   if (e.key === "Enter") {
-    const name = $exp.value.trim();
-    if (name) { addExperiment(name); }
+    if (open && expDropdownIdx >= 0) {
+      e.preventDefault();
+      const name = items[expDropdownIdx].dataset.name;
+      $exp.value = name;
+      $expDropdown.style.display = "none";
+      $expDropdown.innerHTML = "";
+      $expGhost.textContent = "";
+      expDropdownIdx = -1;
+      addExperiment(name);
+    } else {
+      const name = $exp.value.trim();
+      if (name) {
+        $expDropdown.style.display = "none";
+        $expDropdown.innerHTML = "";
+        $expGhost.textContent = "";
+        expDropdownIdx = -1;
+        addExperiment(name);
+      }
+    }
+    return;
+  }
+  if (e.key === "Escape") {
+    $expDropdown.style.display = "none";
+    $expDropdown.innerHTML = "";
+    $expGhost.textContent = "";
+    expDropdownIdx = -1;
+    return;
+  }
+});
+
+$expDropdown.addEventListener("click", e => {
+  const item = e.target.closest(".exp-dropdown-item");
+  if (!item) return;
+  const name = item.dataset.name;
+  $exp.value = name;
+  $expDropdown.style.display = "none";
+  $expDropdown.innerHTML = "";
+  $expGhost.textContent = "";
+  expDropdownIdx = -1;
+  addExperiment(name);
+});
+
+document.addEventListener("click", e => {
+  if (!$exp.contains(e.target) && !$expDropdown.contains(e.target)) {
+    $expDropdown.style.display = "none";
+    $expGhost.textContent = "";
+    expDropdownIdx = -1;
   }
 });
 
