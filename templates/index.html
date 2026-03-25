@@ -867,6 +867,7 @@ document.addEventListener("click", e => {
 
 let lastChartData = null;
 let lastChartMetrics = [];
+let lastChartGroups = [];  // [{name, metrics}] — preserved for in-place poll updates
 
 function renderCharts() {
   if (!lastChartData) return;
@@ -910,26 +911,49 @@ async function pollMetrics() {
       body: JSON.stringify({run_ids: runIds, metrics, skip_cache: true}),
     });
     lastChartData = data;
-    const scrollEl = document.querySelector(".content");
-    const savedScroll = scrollEl ? scrollEl.scrollTop : 0;
-    const savedZooms = uplotInstances.map(u => ({
-      x: { min: u.scales.x.min, max: u.scales.x.max },
-      y: { min: u.scales.y.min, max: u.scales.y.max },
-    }));
-    uplotInstances.forEach(u => u.destroy());
-    uplotInstances = [];
-    $chartGrid.innerHTML = "";
-    const cols = parseInt($colSlider.value, 10);
-    $chartGrid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
-    drawChartsFromData(data, metrics);
-    uplotInstances.forEach((u, i) => {
-      if (i < savedZooms.length) {
-        const z = savedZooms[i];
-        if (z.x.min != null && z.x.max != null) u.setScale("x", z.x);
-        if (z.y.min != null && z.y.max != null) u.setScale("y", z.y);
-      }
+
+    // Build lookup from new data
+    const byMetric = {};
+    data.results.forEach(r => {
+      if (!byMetric[r.metric]) byMetric[r.metric] = [];
+      byMetric[r.metric].push(r);
     });
-    if (scrollEl) scrollEl.scrollTop = savedScroll;
+
+    const runColorMap = {};
+    let colorIdx = 0;
+    [...selectedRunIds].forEach(id => {
+      runColorMap[id] = COLORS[colorIdx % COLORS.length];
+      colorIdx++;
+    });
+
+    const useWall = getXAxisMode() === "wall";
+    const smoothAlpha = getSmoothingFactor();
+
+    // If chart count matches, update in-place; otherwise full re-render
+    if (lastChartGroups.length === uplotInstances.length) {
+      lastChartGroups.forEach((group, i) => {
+        const allEntries = [];
+        group.metrics.forEach(metric => {
+          const entries = (byMetric[metric] || []).filter(e => e.steps && e.steps.length > 0);
+          entries.forEach(e => allEntries.push({ ...e, _metric: metric }));
+        });
+        if (allEntries.length) {
+          const { uData } = buildGroupUData(allEntries, runColorMap, useWall, smoothAlpha);
+          uplotInstances[i].setData(uData, false);  // false = preserve zoom/scales
+        }
+      });
+    } else {
+      // Fallback: full re-render (rare — metric set changed)
+      const scrollEl = document.querySelector(".content");
+      const savedScroll = scrollEl ? scrollEl.scrollTop : 0;
+      uplotInstances.forEach(u => u.destroy());
+      uplotInstances = [];
+      $chartGrid.innerHTML = "";
+      const cols = parseInt($colSlider.value, 10);
+      $chartGrid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+      drawChartsFromData(data, metrics);
+      if (scrollEl) requestAnimationFrame(() => { scrollEl.scrollTop = savedScroll; });
+    }
   } catch (err) {
     console.warn("Auto-refresh poll failed:", err);
   }
@@ -979,6 +1003,75 @@ async function loadCharts() {
   }
 }
 
+function buildGroupUData(allEntries, runColorMap, useWall, smoothAlpha) {
+  const multiMetric = new Set(allEntries.map(e => e._metric)).size > 1;
+  let xArr, series, uData, xLabel;
+
+  if (useWall && allEntries[0].timestamps && allEntries[0].timestamps.length) {
+    xLabel = "Hours";
+    const relData = allEntries.map(entry => {
+      const t0 = entry.timestamps[0] || 0;
+      return {
+        xs: entry.timestamps.map(ts => (ts - t0) / 3600000),
+        ys: entry.values,
+        entry,
+      };
+    });
+    const allX = new Set();
+    relData.forEach(d => d.xs.forEach(x => allX.add(x)));
+    xArr = [...allX].sort((a, b) => a - b);
+    const xIdx = {};
+    xArr.forEach((v, i) => { xIdx[v] = i; });
+
+    series = [{ label: xLabel }];
+    uData = [new Float64Array(xArr)];
+
+    relData.forEach((d, i) => {
+      const metricSuffix = multiMetric ? ` [${d.entry._metric.split("/").pop()}]` : "";
+      const label = getRunLabel(d.entry.run_id) + metricSuffix;
+      series.push({
+        label,
+        stroke: runColorMap[d.entry.run_id] || COLORS[i % COLORS.length],
+        width: 1.5,
+      });
+      let yArr = new Float64Array(xArr.length).fill(NaN);
+      for (let j = 0; j < d.xs.length; j++) {
+        yArr[xIdx[d.xs[j]]] = d.ys[j];
+      }
+      if (smoothAlpha > 0) yArr = emaSmooth(yArr, smoothAlpha);
+      uData.push(yArr);
+    });
+  } else {
+    xLabel = "Step";
+    const allSteps = new Set();
+    allEntries.forEach(e => e.steps.forEach(s => allSteps.add(s)));
+    xArr = [...allSteps].sort((a, b) => a - b);
+    const xIdx = {};
+    xArr.forEach((v, i) => { xIdx[v] = i; });
+
+    series = [{ label: xLabel }];
+    uData = [new Float64Array(xArr)];
+
+    allEntries.forEach((entry, i) => {
+      const metricSuffix = multiMetric ? ` [${entry._metric.split("/").pop()}]` : "";
+      const label = getRunLabel(entry.run_id) + metricSuffix;
+      series.push({
+        label,
+        stroke: runColorMap[entry.run_id] || COLORS[i % COLORS.length],
+        width: 1.5,
+      });
+      let yArr = new Float64Array(xArr.length).fill(NaN);
+      for (let j = 0; j < entry.steps.length; j++) {
+        yArr[xIdx[entry.steps[j]]] = entry.values[j];
+      }
+      if (smoothAlpha > 0) yArr = emaSmooth(yArr, smoothAlpha);
+      uData.push(yArr);
+    });
+  }
+
+  return { uData, series, xLabel, xArr };
+}
+
 function drawChartsFromData(data, metrics) {
   const byMetric = {};
   data.results.forEach(r => {
@@ -999,6 +1092,7 @@ function drawChartsFromData(data, metrics) {
   const yScaleMode = getYScale();
   const smoothAlpha = getSmoothingFactor();
   const groups = groupMetrics(metrics);
+  lastChartGroups = groups;
 
   groups.forEach(group => {
     const card = document.createElement("div");
@@ -1040,70 +1134,7 @@ function drawChartsFromData(data, metrics) {
     card.appendChild(wrap);
     $chartGrid.appendChild(card);
 
-    const multiMetric = group.metrics.length > 1;
-    let xArr, series, uData, xLabel;
-
-    if (useWall && allEntries[0].timestamps && allEntries[0].timestamps.length) {
-      xLabel = "Hours";
-      const relData = allEntries.map(entry => {
-        const t0 = entry.timestamps[0] || 0;
-        return {
-          xs: entry.timestamps.map(ts => (ts - t0) / 3600000),
-          ys: entry.values,
-          entry,
-        };
-      });
-      const allX = new Set();
-      relData.forEach(d => d.xs.forEach(x => allX.add(x)));
-      xArr = [...allX].sort((a, b) => a - b);
-      const xIdx = {};
-      xArr.forEach((v, i) => { xIdx[v] = i; });
-
-      series = [{ label: xLabel }];
-      uData = [new Float64Array(xArr)];
-
-      relData.forEach((d, i) => {
-        const metricSuffix = multiMetric ? ` [${d.entry._metric.split("/").pop()}]` : "";
-        const label = getRunLabel(d.entry.run_id) + metricSuffix;
-        series.push({
-          label,
-          stroke: runColorMap[d.entry.run_id] || COLORS[i % COLORS.length],
-          width: 1.5,
-        });
-        let yArr = new Float64Array(xArr.length).fill(NaN);
-        for (let j = 0; j < d.xs.length; j++) {
-          yArr[xIdx[d.xs[j]]] = d.ys[j];
-        }
-        if (smoothAlpha > 0) yArr = emaSmooth(yArr, smoothAlpha);
-        uData.push(yArr);
-      });
-    } else {
-      xLabel = "Step";
-      const allSteps = new Set();
-      allEntries.forEach(e => e.steps.forEach(s => allSteps.add(s)));
-      xArr = [...allSteps].sort((a, b) => a - b);
-      const xIdx = {};
-      xArr.forEach((v, i) => { xIdx[v] = i; });
-
-      series = [{ label: xLabel }];
-      uData = [new Float64Array(xArr)];
-
-      allEntries.forEach((entry, i) => {
-        const metricSuffix = multiMetric ? ` [${entry._metric.split("/").pop()}]` : "";
-        const label = getRunLabel(entry.run_id) + metricSuffix;
-        series.push({
-          label,
-          stroke: runColorMap[entry.run_id] || COLORS[i % COLORS.length],
-          width: 1.5,
-        });
-        let yArr = new Float64Array(xArr.length).fill(NaN);
-        for (let j = 0; j < entry.steps.length; j++) {
-          yArr[xIdx[entry.steps[j]]] = entry.values[j];
-        }
-        if (smoothAlpha > 0) yArr = emaSmooth(yArr, smoothAlpha);
-        uData.push(yArr);
-      });
-    }
+    const { uData, series, xLabel, xArr } = buildGroupUData(allEntries, runColorMap, useWall, smoothAlpha);
 
     const rect = wrap.getBoundingClientRect();
     const width = Math.max(rect.width || card.clientWidth - 20, 280);
