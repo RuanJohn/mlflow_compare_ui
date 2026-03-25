@@ -1365,12 +1365,12 @@ window.addEventListener("resize", () => {
 
 $loadBtn.addEventListener("click", () => {
   const name = $exp.value.trim();
-  if (name) { addExperiment(name); $exp.value = ""; }
+  if (name) { addExperiment(name); }
 });
 $exp.addEventListener("keydown", e => {
   if (e.key === "Enter") {
     const name = $exp.value.trim();
-    if (name) { addExperiment(name); $exp.value = ""; }
+    if (name) { addExperiment(name); }
   }
 });
 
