@@ -488,7 +488,10 @@ function getFilteredRuns() {
   const nf = $nameFilter.value.toLowerCase();
   const tf = $tagFilter.value.toLowerCase();
   return allRuns.filter(r => {
-    if (nf && !r.run_name.toLowerCase().includes(nf)) return false;
+    if (nf) {
+      const displayName = r._experimentName ? r._experimentName + '/' + r.run_name : r.run_name;
+      if (!displayName.toLowerCase().includes(nf)) return false;
+    }
     if (tf && !r.tags_list.some(t => t.toLowerCase().includes(tf))) return false;
     return true;
   });
@@ -602,7 +605,7 @@ function renderTable() {
     const tags = (r.tags_list||[]).map(t => `<span class="tag-chip" title="${t}">${t}</span>`).join("");
     return `<tr>
       <td><input type="checkbox" class="run-cb" data-id="${r.run_id}" ${checked}></td>
-      <td>${esc(r.run_name)}</td>
+      <td>${r._experimentName ? esc(r._experimentName + '/' + r.run_name) : esc(r.run_name)}</td>
       <td style="white-space:nowrap">${formatTime(r.start_time)}</td>
       <td><span class="status-badge status-${r.status}">${r.status}</span></td>
       <td class="mono">${r.run_id}</td>
@@ -692,7 +695,9 @@ $metricSearch.addEventListener("input", renderMetricList);
 function getRunLabel(runId) {
   if (customLegends.has(runId)) return customLegends.get(runId);
   const run = allRuns.find(r => r.run_id === runId);
-  return run ? run.run_name : runId.slice(0, 8);
+  if (!run) return runId.slice(0, 8);
+  const prefix = run._experimentName ? run._experimentName + '/' : '';
+  return prefix + run.run_name;
 }
 
 function getRunColor(runId) {
@@ -715,10 +720,10 @@ function renderSelectedRuns() {
 
   $selectedRunsList.innerHTML = ids.map((id, i) => {
     const run = allRuns.find(r => r.run_id === id);
-    const name = run ? run.run_name : id.slice(0, 8);
+    const name = run ? (run._experimentName ? run._experimentName + '/' + run.run_name : run.run_name) : id.slice(0, 8);
     const legend = customLegends.has(id) ? customLegends.get(id) : name;
     const color = COLORS[i % COLORS.length];
-    const expName = experimentId || "";
+    const expName = run ? (run._fullExperimentName || "") : "";
     return `<div class="sr-card" data-id="${id}">
       <span class="sr-dot" style="background:${color}"></span>
       <div class="sr-info">
